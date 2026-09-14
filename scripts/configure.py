@@ -70,7 +70,7 @@ frontendBaseDir = "./web/build"
         'policy': {'mode': 'file', 'path': '/etc/headscale/policy.json'},
         'unix_socket': '/var/lib/headscale/headscale.sock', 'unix_socket_permission': '0770',
         'oidc': {'issuer': issuer, 'client_id': site['headscale_client_id'], 'client_secret_path': '/run/secrets/oidc_secret',
-                 'only_start_if_oidc_is_available': False, 'scope': ['openid', 'profile', 'email', 'groups'],
+                 'only_start_if_oidc_is_available': True, 'scope': ['openid', 'profile', 'email', 'groups'],
                  'allowed_groups': [site['organization'] + '/' + site['admission_group']],
                  'email_verified_required': True, 'use_expiry_from_token': False, 'pkce': {'enabled': True, 'method': 'S256'}}
     }

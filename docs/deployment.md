@@ -64,6 +64,8 @@ stack exec -T headscale headscale apikeys create --expiration 90d > .runtime/sec
 stack --profile apps up -d headplane
 ```
 
+Headscale requires working Casdoor OIDC discovery at startup. On host reboot, its restart policy retries until Casdoor and public TLS routing are ready; it must not silently fall back to local registration. A broker outage prevents new enrollments; existing network behavior must be checked separately.
+
 Verify the key file contains only the generated key (not log output); it is a server-side administrative credential. Rotate it before expiry and recreate Headplane after rotation. Its browser API-key login is disabled.
 
 Start the sync worker only after its credentials and configuration are in place and its dry run succeeds. The first Headplane OIDC login becomes owner: restrict access during bootstrap and perform it with the intended operator before admitting other users. Keep employee defaults as `member`, not `admin` or `viewer`.

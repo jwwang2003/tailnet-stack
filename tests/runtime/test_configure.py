@@ -44,6 +44,7 @@ class ConfigureTests(unittest.TestCase):
             self.assertEqual(json.loads((root / 'headscale/policy.json').read_text())['acls'], [])
             hs = json.loads((root / 'headscale/config.yaml').read_text())
             self.assertEqual(hs['oidc']['allowed_groups'], ['employees/tailnet-members'])
+            self.assertTrue(hs['oidc']['only_start_if_oidc_is_available'])
             hp = json.loads((root / 'headplane/config.yaml').read_text())
             self.assertTrue(hp['oidc']['disable_api_key_login'])
             self.assertEqual(hp['server']['cookie_max_age'], 300)
