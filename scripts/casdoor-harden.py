@@ -10,8 +10,10 @@ Policy:
 - Every OAuth provider on the organization's applications gets an explicit
   empty binding rule: a Feishu login that is not already linked by `lark`
   cannot attach itself to an existing account by email, phone or username.
-- Face ID, WebAuthn and verification-code sign-in are disabled on those
-  applications, keeping the identity provider the only interactive login path.
+- Face ID and verification-code sign-in are disabled; the WebAuthn sign-in
+  option is removed. Other configured methods, including Password/LDAP, remain
+  unchanged. The pinned server's WebAuthn endpoints need separate enforcement
+  before claiming that existing credentials cannot authenticate.
 """
 from __future__ import annotations
 
@@ -98,10 +100,33 @@ def plan_application(application):
             if provider.get(flag):
                 changes.append(f"provider {provider.get('name')!r}: {flag} true -> false")
                 provider[flag] = False
-    for flag in ("enableFaceId", "enableWebAuthn", "enableCodeSignin", "enableSignUp"):
+    # These are the actual legacy fields in the pinned Application schema.
+    # Face ID has no boolean flag: its signinMethods entry controls access.
+    for flag in ("enableWebAuthn", "enableCodeSignin", "enableSignUp"):
         if application.get(flag) is not False:
             changes.append(f"{flag} {application.get(flag)!r} -> false")
             application[flag] = False
+    methods = application.get("signinMethods") or []
+    hardened = []
+    if not methods and application.get("enablePassword"):
+        # Match Casdoor's legacy empty-list expansion without dropping a
+        # password method that was already enabled before hardening.
+        hardened.append({"name": "Password", "displayName": "Password", "rule": "All"})
+    for method in methods:
+        if method.get("name") in ("Verification code", "WebAuthn"):
+            # Verification-code backend checks do not honor the hidden rule.
+            continue
+        item = dict(method)
+        if item.get("name") == "Face ID":
+            item["rule"] = "Hide password"
+        hardened.append(item)
+    if not hardened:
+        # Casdoor adds an ENABLED Face ID method when the list is empty.
+        # Keep an explicitly disabled entry to suppress that default.
+        hardened.append({"name": "Face ID", "displayName": "Face ID", "rule": "Hide password"})
+    if hardened != methods:
+        changes.append("signinMethods: disable Face ID and remove WebAuthn/verification-code sign-in")
+        application["signinMethods"] = hardened
     return changes
 
 
