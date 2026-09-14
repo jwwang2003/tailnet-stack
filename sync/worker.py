@@ -303,7 +303,7 @@ class Casdoor:
         response = self.http.request("POST" if body is not None else "GET", self.config["base_url"], "/api/" + action, query=query, body=body, headers=self.headers, retry=not mutate)
         if response.get("status") != "ok":
             raise SyncError(f"Casdoor {action} rejected; check API permissions and server logs")
-        if mutate and action != "run-syncer" and response.get("data") is not True:
+        if mutate and action != "run-syncer" and response.get("data") != "Affected":
             raise SyncError(f"Casdoor {action} did not confirm a write")
         return response.get("data")
 
@@ -318,10 +318,16 @@ class Casdoor:
         columns = syncer.get("tableColumns")
         if not isinstance(columns, list) or not columns:
             raise SyncError("native syncer must have explicit profile-only tableColumns")
+        key_columns = [column for column in columns if column.get("isKey") is True]
+        if len(key_columns) != 1 or key_columns[0].get("casdoorName") != "Lark":
+            raise SyncError("native syncer must use exactly one immutable Lark binding key")
+        allowed_columns = {"Lark", "DisplayName", "Email", "Avatar", "Title", "Phone", "CountryCode", "Gender", "Address"}
         for column in columns:
             name = column.get("casdoorName", "")
-            if name.lower().replace("_", "") in ("groups", "properties", "isforbidden", "id"):
+            if name not in allowed_columns:
                 raise SyncError("native syncer tableColumns overlap worker or immutable identity fields")
+            if name == "Lark" and column.get("isHashed") is not False:
+                raise SyncError("native Lark key must have isHashed=false")
             if not name or column.get("name") != name:
                 raise SyncError("native syncer tableColumns must use matching Casdoor-cased name and casdoorName")
 
@@ -462,7 +468,10 @@ def plan(config, snapshot, users, groups, state):
                 properties[FORBIDDEN_MARKER] = reason
             next_forbidden = True
         elif properties.get(FORBIDDEN_MARKER) and config["allow_reenable"]:
-            properties.pop(FORBIDDEN_MARKER, None)
+            # update-user merges object keys into the old nonnil Properties map.
+            # An omitted key is preserved by Go's JSON decoder, so clear the
+            # marker with an explicit falsey value instead of omitting it.
+            properties[FORBIDDEN_MARKER] = ""
             next_forbidden = False
         target_groups = {item for item in current_groups if not managed(item)}
         target_role = "member"

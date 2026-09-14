@@ -18,6 +18,7 @@ Configure Casdoor's native Lark syncer with `isEnabled: false`, the matching org
 
 ```json
 [
+  {"name": "Lark", "casdoorName": "Lark", "isKey": true, "isHashed": false},
   {"name": "DisplayName", "casdoorName": "DisplayName"},
   {"name": "Email", "casdoorName": "Email"},
   {"name": "Avatar", "casdoorName": "Avatar"},
@@ -25,7 +26,7 @@ Configure Casdoor's native Lark syncer with `isEnabled: false`, the matching org
 ]
 ```
 
-Keep `Id`, `Groups`, `Properties`, and `IsForbidden` out of these columns. The worker invokes the corrected native syncer serially only after the Feishu snapshot and existing Casdoor state pass validation. This still is not a cross-service transaction: a later API failure can leave an applied prefix of changes. The next successful run reconciles it; the missing-user counters advance only after every operation succeeds. Do not run Casdoor's native schedule or another worker against the same organization.
+Use exactly one `isKey: true` column: `Lark`, carrying the corrected `open_id` binding. Display names and emails cannot be keys. Keep `Name`, `Id`, `Groups`, `Properties`, and `IsForbidden` out of these columns. Matching Casdoor-cased names are an integration convention, not an upstream hashing requirement. The worker invokes the corrected native syncer serially only after the Feishu snapshot and existing Casdoor state pass validation. This still is not a cross-service transaction: a later API failure can leave an applied prefix of changes. The next successful run reconciles it; the missing-user counters advance only after every operation succeeds. Do not run Casdoor's native schedule or another worker against the same organization.
 
 Admission options:
 

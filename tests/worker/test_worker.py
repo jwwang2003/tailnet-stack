@@ -38,7 +38,7 @@ class FixtureApi:
         self.scope = {"department_ids": ["0"], "user_ids": [], "group_ids": ["g_tailnet", "g_admin"]}
         self.fail_path = None
         self.native_enabled = False
-        self.native_columns = [{"name": "DisplayName", "casdoorName": "DisplayName"}]
+        self.native_columns = [{"name": "Lark", "casdoorName": "Lark", "isKey": True, "isHashed": False}, {"name": "DisplayName", "casdoorName": "DisplayName"}]
         self.native_app_id = "cli_REPLACE_ME"
         self.before_update = None
 
@@ -93,19 +93,24 @@ class FixtureApi:
         elif action == "add-group":
             self.writes.append(action)
             self.groups.append(copy.deepcopy(body))
-            result = True
+            result = "Affected"
         elif action == "update-group":
             self.writes.append(action)
             old = next(item for item in self.groups if item["name"] == body["name"])
             old.update(copy.deepcopy(body))
-            result = True
+            result = "Affected"
         elif action == "update-user":
             self.writes.append(action)
             old = next(item for item in self.users if item["owner"] + "/" + item["name"] == query["id"])
             assert set(query["columns"].split(",")) == set(body)
             assert set(body) <= {"groups", "properties", "isForbidden"}
+            # Real update-user merges JSON into a shallow copy of the old user;
+            # omitted Properties keys therefore remain present.
+            properties = {**(old.get("properties") or {}), **body.get("properties", {})}
             old.update(copy.deepcopy(body))
-            result = True
+            if "properties" in body:
+                old["properties"] = properties
+            result = "Affected"
         else:
             raise AssertionError((method, path, query))
         return {"status": "ok", "data": result}
@@ -225,7 +230,12 @@ class WorkerLifecycleTests(unittest.TestCase):
         self.alice["properties"].pop(w.HOLD_MARKER)
         self.assertEqual(self.run_worker()["users_reenabled"], 1)
         self.assertFalse(self.alice["isForbidden"])
+        self.assertFalse(self.alice["properties"][w.FORBIDDEN_MARKER])
         self.assertIn("employees/tailnet-members", self.alice["groups"])
+        # A cleared worker marker must not later undo an operator's direct block.
+        self.alice["isForbidden"] = True
+        self.run_worker()
+        self.assertTrue(self.alice["isForbidden"])
 
     def test_preexisting_operator_block_is_preserved(self):
         self.alice["isForbidden"] = True
@@ -277,8 +287,14 @@ class WorkerLifecycleTests(unittest.TestCase):
         with self.assertRaisesRegex(w.SyncError, "only scheduler"):
             self.run_worker()
         self.api.native_enabled = False
-        self.api.native_columns = [{"name": "Groups", "casdoorName": "Groups"}]
+        self.api.native_columns.append({"name": "Groups", "casdoorName": "Groups"})
         with self.assertRaisesRegex(w.SyncError, "overlap"):
+            self.run_worker()
+        self.assertEqual(self.api.writes, [])
+
+    def test_native_display_name_cannot_be_the_identity_key(self):
+        self.api.native_columns = [{"name": "DisplayName", "casdoorName": "DisplayName", "isKey": True}]
+        with self.assertRaisesRegex(w.SyncError, "immutable Lark binding key"):
             self.run_worker()
         self.assertEqual(self.api.writes, [])
 
