@@ -151,3 +151,10 @@ class EmployeeProfileTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class EmployeeNumberTests(unittest.TestCase):
+    def test_employee_number_is_text_not_an_internal_id_or_rank(self):
+        profile = p.normalize_profile({"open_id":"ou_person", "user_id":"internal", "employee_no":"000042"})
+        self.assertEqual(profile, {"employee_no":"000042"})
+        delta = p.profile_property_delta(profile, {})
+        self.assertEqual(delta, {"feishu_employee_no":"000042"})

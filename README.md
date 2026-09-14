@@ -27,6 +27,8 @@ to Headscale do not automatically become Headscale network ACL groups.
 - Feishu directory synchronization and deployment files live here, so upstream
   updates do not overwrite them.
 
+For company employee data (部门、职务、工号, phone and email), use the [employee-directory guide](docs/feishu-employee-directory.md).
+
 ## Getting started
 
 **Recommended: [build locally on Windows, transfer over SSH, and load on the server](docs/local-build-deploy.md).** No registry subscription is required; the six-image bundle includes PostgreSQL and Caddy. [Native rootless Podman in WSL](docs/podman-build.md) is also supported for local builds and export; the server still uses Docker.

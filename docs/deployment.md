@@ -532,7 +532,7 @@ Create native syncer `admin/feishu` with:
 | Is read only | `true` — never write back to Feishu |
 | Sync interval | `300` (scheduler remains disabled) |
 
-Use these exact columns:
+Use these columns; include `Phone` only after the audit confirms access to `mobile`. See [employee fields and profile-only mode](feishu-employee-directory.md) for 部门、职务、工号:
 
 ```json
 [

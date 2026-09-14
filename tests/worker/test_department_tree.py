@@ -150,12 +150,12 @@ class DepartmentTreeTests(unittest.TestCase):
                 self.api.child_page_overrides["od_platform", 0] = page
                 self.assert_rejected_without_writes("missing pagination status")
 
-    def test_other_endpoints_still_require_explicit_item_lists(self):
+    def test_nonterminal_user_pages_still_require_explicit_item_lists(self):
         original = self.api.request
 
         def missing_users(method, base, path, **kwargs):
             if path.endswith("users/find_by_department"):
-                return {"code": 0, "data": {"has_more": False}}
+                return {"code": 0, "data": {"has_more": True, "page_token": "next"}}
             return original(method, base, path, **kwargs)
 
         self.api.request = missing_users

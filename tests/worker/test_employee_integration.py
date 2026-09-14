@@ -92,3 +92,26 @@ class EmployeeIntegrationTests(unittest.TestCase):
         result=w.profile_only(self.config,http=self.api)
         self.assertEqual(result['mode'],'profile-only-dry-run')
         self.assertEqual(self.api.writes,[])
+
+    def test_empty_department_user_page_can_omit_items(self):
+        original = self.api.request
+        def empty_root(method, base, path, **kwargs):
+            if path.endswith('users/find_by_department') and kwargs.get('query',{}).get('department_id')=='0':
+                return {'code':0,'data':{'has_more':False}}
+            return original(method,base,path,**kwargs)
+        self.api.request = empty_root
+        report=w.audit_directory(self.config,self.api)
+        self.assertEqual(report['source_users'],2)
+        self.assertEqual(self.api.writes,[])
+
+    def test_native_preservation_without_enrichment(self):
+        self.config['employee_profile']['enabled'] = False
+        self.test_unavailable_phone_does_not_erase_native_value()
+
+    def test_empty_email_requires_observed_fallback(self):
+        self.alice['email'] = 'existing@example.test'
+        self.api.native_columns.append({'name':'Email','casdoorName':'Email','isHashed':True})
+        self.api.source_users['od_platform'][0]['email'] = ''
+        with self.assertRaisesRegex(w.SyncError, 'refusing to erase'):
+            self.run_worker()
+        self.assertEqual(self.api.writes, [])

@@ -292,7 +292,7 @@ class Feishu:
                 current = parents[current]
             ancestors[key] = path - {"0"}
         for department_id in sorted(departments):
-            for user in self.items("users/find_by_department", query={"department_id": department_id, "department_id_type": "open_department_id", "user_id_type": "open_id"}):
+            for user in self.items("users/find_by_department", query={"department_id": department_id, "department_id_type": "open_department_id", "user_id_type": "open_id"}, allow_empty_terminal=True):
                 key = identifier(user.get("open_id"), "user open_id")
                 status = user.get("status")
                 required = ("is_activated", "is_frozen", "is_resigned", "is_exited")
@@ -701,16 +701,19 @@ def run(config, apply=False, http=None):
     casdoor = Casdoor(config["casdoor"], http)
     native_columns = casdoor.verify_native(config["feishu"])
     users, groups = casdoor.snapshot()
-    if config.get("employee_profile", {}).get("enabled"):
-        # Missing optional fields must not erase previously stored native values.
-        guards = {"Phone": ("phone", ("mobile",)), "Title": ("title", ("job_title",)), "Email": ("email", ("email", "enterprise_email"))}
-        for user in users:
-            source = snapshot["users"].get(user.get("lark"))
-            if source is None:
-                continue
-            for column, (target, fields) in guards.items():
-                if column in native_columns and user.get(target) and not any(field in source.get("profile", {}) for field in fields):
-                    raise SyncError("Native " + column + " source field is unavailable; refusing to erase existing profile data")
+    # Guard native columns even when descriptive enrichment is disabled.
+    guards = {"Phone": ("phone", ("mobile",)), "Title": ("title", ("job_title",)), "Email": ("email", ("email", "enterprise_email"))}
+    for user in users:
+        source = snapshot["users"].get(user.get("lark"))
+        if source is None:
+            continue
+        profile = source.get("profile", {})
+        for column, (target, fields) in guards.items():
+            # A nonempty observed value can supply the native fallback. An empty
+            # result is safe only when every contributing field was observed.
+            known_result = any(profile.get(field) for field in fields) or all(field in profile for field in fields)
+            if column in native_columns and user.get(target) and not known_result:
+                raise SyncError("Native " + column + " source field is unavailable; refusing to erase existing profile data")
     # Reject known target collisions, changed identities and oversized claims before
     # native import (which itself mutates profiles).
     plan(config, snapshot, users, groups, state)

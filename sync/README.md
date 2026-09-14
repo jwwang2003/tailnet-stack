@@ -1,5 +1,7 @@
 # Feishu directory worker
 
+For 部门、职务、工号 and optional phone/email extraction, see [employee-directory setup](../docs/feishu-employee-directory.md).
+
 The worker adds department/group memberships and offboarding to the corrected native Casdoor Lark importer. It uses Python 3.11+ and the standard library. Run it as one replica against a persistent state directory.
 
 ```sh
@@ -53,3 +55,5 @@ python3 -m unittest discover -s tests/worker -v
 ```
 
 The suite covers transport retry behavior, cursor pagination, complete/partial snapshots, immutable identity, local-group preservation, renames/moves, Contact department expansion, role demotion, safe offboarding, and re-enabling/holds. Live Feishu OAuth, actual field permissions, Casdoor database enforcement, OIDC claim signatures, and application registration still require the deployment acceptance test using real app credentials and approved data scope.
+
+Missing status does not permit lifecycle synchronization. Use `--audit` for availability counts or `--profile-only --apply` for descriptive properties without access changes. Enable Phone in the native mapping only after validating phone field access.

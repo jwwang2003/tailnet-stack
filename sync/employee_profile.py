@@ -13,7 +13,7 @@ class ProfileError(ValueError):
 
 
 STRING_FIELDS = (
-    "name", "mobile", "email", "enterprise_email", "job_title",
+    "name", "mobile", "email", "enterprise_email", "job_title", "employee_no",
     "job_level_id", "job_family_id", "leader_user_id",
 )
 FIELDS = (*STRING_FIELDS, "employee_type", "is_tenant_manager")
