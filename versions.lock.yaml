@@ -22,7 +22,7 @@ components:
     fork: "https://github.com/jwwang2003/headplane"
     tag: "v0.7.1"
     upstream_commit: "30c842ed8dbf011e78596e3a474133ec4069ba79"
-    source_commit: "43ac88838f3d2bec1dfc98ab6f49ce84556d92f2"
+    source_commit: "5d17cde209c77083004acec4cc255365bc83ebb1"
     image: "tailnet/headplane:2026.09-rc.1"
     image_digest: null
   casdoor:

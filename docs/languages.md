@@ -8,7 +8,8 @@ optional OAuth/directory provider; choosing Chinese does not select a provider.
 
 ## Headplane
 
-Use **Language / 语言** in the bottom-right corner of the login and administration pages to choose
+Use **Language / 语言** beside the user icon in the top-right administration header
+(or the top-right corner of login and error pages) to choose
 **English** or **简体中文**. The interface changes without signing out. A validated
 `headplane_locale` cookie remembers the choice for one year; fresh sessions use
 the browser's preferred supported language, then English. Server rendering uses
