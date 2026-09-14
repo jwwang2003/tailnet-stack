@@ -14,7 +14,7 @@ Start from `config.example.json`. Mount credentials as files and keep the popula
 
 `casdoor.client_id`/secret must belong to a dedicated, restricted server-side application able to read the selected organization's users/groups and syncer, invoke that syncer, create/update groups, and update user groups/properties/status. Basic authentication keeps the secret out of URLs. Keep plain HTTP Casdoor calls on the private container network; use HTTPS for remote hosts. The worker refuses HTTP redirects, bounds retries and response sizes, and does not retry uncertain writes automatically.
 
-Configure Casdoor's native Lark syncer with `isEnabled: false`, the matching organization and Feishu app, and profile-only `tableColumns`. Example:
+Configure Casdoor's native Lark syncer with `isEnabled: false`, `isReadOnly: true` (no attempted writes back to Feishu), the matching organization and Feishu app, and profile-only `tableColumns`. Example:
 
 ```json
 [

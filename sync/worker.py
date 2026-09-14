@@ -313,6 +313,8 @@ class Casdoor:
             raise SyncError("native Lark syncer is absent or belongs to another organization")
         if syncer.get("isEnabled") is not False:
             raise SyncError("disable native syncer scheduling; worker must be the only scheduler")
+        if syncer.get("isReadOnly") is not True:
+            raise SyncError("native Lark syncer must have isReadOnly=true; Feishu is the source")
         if syncer.get("host", "").rstrip("/") != feishu_config["base_url"] or syncer.get("user") != feishu_config["app_id"]:
             raise SyncError("native syncer host and app ID must match the worker's Feishu source")
         columns = syncer.get("tableColumns")

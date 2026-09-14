@@ -38,6 +38,7 @@ class FixtureApi:
         self.scope = {"department_ids": ["0"], "user_ids": [], "group_ids": ["g_tailnet", "g_admin"]}
         self.fail_path = None
         self.native_enabled = False
+        self.native_read_only = True
         self.native_columns = [{"name": "Lark", "casdoorName": "Lark", "isKey": True, "isHashed": False}, {"name": "DisplayName", "casdoorName": "DisplayName"}]
         self.native_app_id = "cli_REPLACE_ME"
         self.before_update = None
@@ -74,7 +75,7 @@ class FixtureApi:
             return self.page("memberlist", [{"member_id": item, "member_id_type": "open_id", "member_type": "user"} for item in self.group_members[group_id]])
         action = path.removeprefix("/api/")
         if action == "get-syncer":
-            result = {"type": "Lark", "organization": "employees", "isEnabled": self.native_enabled, "tableColumns": self.native_columns, "host": "https://open.feishu.cn", "user": self.native_app_id}
+            result = {"type": "Lark", "organization": "employees", "isEnabled": self.native_enabled, "isReadOnly": self.native_read_only, "tableColumns": self.native_columns, "host": "https://open.feishu.cn", "user": self.native_app_id}
         elif action == "get-users":
             result = copy.deepcopy(self.users)
         elif action == "get-groups":
@@ -295,6 +296,12 @@ class WorkerLifecycleTests(unittest.TestCase):
     def test_native_display_name_cannot_be_the_identity_key(self):
         self.api.native_columns = [{"name": "DisplayName", "casdoorName": "DisplayName", "isKey": True}]
         with self.assertRaisesRegex(w.SyncError, "immutable Lark binding key"):
+            self.run_worker()
+        self.assertEqual(self.api.writes, [])
+
+    def test_native_read_only_required_before_import(self):
+        self.api.native_read_only = False
+        with self.assertRaisesRegex(w.SyncError, "isReadOnly=true"):
             self.run_worker()
         self.assertEqual(self.api.writes, [])
 
