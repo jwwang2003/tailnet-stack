@@ -4,7 +4,17 @@ set -euo pipefail
 integration_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 workspace=${1:-$(dirname -- "$integration_root")}
 
-command -v docker >/dev/null || { echo 'Install Docker with BuildKit before building images.' >&2; exit 1; }
+command -v docker >/dev/null || {
+  echo 'Docker CLI was not found in this shell.' >&2
+  echo 'Windows/WSL: install/start Docker Desktop in Windows, select Linux containers, and enable Settings > Resources > WSL Integration for this Ubuntu distribution. Reopen the terminal and run docker version.' >&2
+  echo 'Native Linux: install Docker Engine with BuildKit. Do not install a second Engine inside WSL when using Docker Desktop.' >&2
+  exit 1
+}
+command -v python3 >/dev/null || { echo 'Python 3 is required; activate the project .venv after installing python3-venv.' >&2; exit 1; }
+python3 -c 'import yaml' 2>/dev/null || {
+  echo 'PyYAML is missing. Run: python3 -m venv .venv && . .venv/bin/activate && python3 -m pip install -r requirements-build.txt' >&2
+  exit 1
+}
 # A reverse SSH proxy is reachable on the Linux host, not the default build bridge.
 # Opt in only for a local, rootful Linux daemon with its embedded Docker builder.
 build_platform=${BUILD_PLATFORM:-$(python3 "$integration_root/scripts/release.py" platform)}

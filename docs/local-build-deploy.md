@@ -16,6 +16,8 @@ Use `linux/amd64` for `x86_64`, or `linux/arm64` for `aarch64`. The examples bel
 
 ## 2. Prepare Windows Docker Desktop and WSL
 
+Install [Docker Desktop for Windows](https://docs.docker.com/desktop/setup/install/windows-install/) on **Windows first**, launch it from the Start menu, and wait until its engine is running. Installing WSL/Ubuntu alone does not install Docker.
+
 Use Docker Desktop in Linux-container mode, with its WSL 2 engine and Ubuntu integration enabled. Open **Docker Desktop → Settings → Resources → WSL Integration** and enable your Ubuntu distribution. Do not install a second Docker Engine inside that WSL distribution.
 
 If you do not yet have Ubuntu in WSL, run the following in an administrator PowerShell and complete Windows' prompts/restart:
@@ -37,6 +39,8 @@ docker version
 docker info --format '{{.OSType}}/{{.Architecture}}'
 ```
 
+If `docker` is not found, open Docker Desktop → Settings → Resources → WSL Integration, enable this Ubuntu distribution, apply the change, and reopen the Ubuntu terminal. If the Client appears but the Server does not, start Docker Desktop and wait for the engine. Do not proceed to building until `docker version` shows both.
+
 Docker must show a working Server and Linux containers. Configure your Windows proxy in Docker Desktop's proxy settings if image downloads require it. The remote `BUILD_PROXY_URL=http://127.0.0.1:17890` mode is not for this local build. WSL, Docker's VM, and Windows do not always share loopback, so do not assume that arbitrary containers can directly use Windows `127.0.0.1:7890`. Verify both a Docker image pull and package downloads inside a build with your Desktop proxy configuration.
 
 References: [Docker Desktop WSL integration](https://docs.docker.com/desktop/features/wsl/), [Docker Desktop proxy settings](https://docs.docker.com/desktop/settings-and-maintenance/settings/#proxies).
@@ -57,17 +61,20 @@ git clone --branch release/feishu-2026.09-rc.1 https://github.com/jwwang2003/tai
 cd tailscale-feishu-integration
 python3 -m venv .venv
 . .venv/bin/activate
-python -m pip install -r requirements-build.txt
-python scripts/release.py verify-sources ..
+python3 -m pip install -r requirements-build.txt
+python3 scripts/release.py verify-sources ..
 ```
 
 If using existing clean checkouts, fetch/update the release branches rather than cloning over them. Expected: source-lock verification passes. Keep source code in WSL's Linux filesystem for the build; only copy the final bundle into Windows Downloads.
 
 ## 4. Build the four Fysics images on Windows/WSL
 
-From the local integration checkout:
+From the local integration checkout, activate its Python environment in **each new terminal**:
 
 ```sh
+. .venv/bin/activate
+python3 -c 'import yaml; print("Python dependencies ready")'
+docker version
 unset BUILD_PROXY_URL
 BUILD_PLATFORM=linux/amd64 bash scripts/build-products.sh ..
 ```
@@ -81,7 +88,7 @@ Existing images built before these source labels were introduced need rebuilding
 Still in local WSL:
 
 ```sh
-python scripts/image-bundle.py export \
+python3 scripts/image-bundle.py export \
   --platform linux/amd64 \
   --pull-supporting-images \
   --output /mnt/c/Users/wjw/Downloads/fysics-bundle-2026.09-rc.1-01
@@ -96,6 +103,17 @@ C:\Users\wjw\Downloads\fysics-bundle-2026.09-rc.1-01\
 ```
 
 `--pull-supporting-images` downloads the pinned PostgreSQL and Caddy references from `image-inputs.json` on the **local machine**. Export checks all six platforms/image IDs and the four source labels, runs `docker image save`, and records the archive SHA-256 and source metadata. The Git working tree must be clean so the recorded commit identifies the scripts/worker actually being delivered.
+
+Only export after the build succeeds. To enforce this when pasting both steps, chain them with `&&`:
+
+```sh
+BUILD_PLATFORM=linux/amd64 bash scripts/build-products.sh .. &&
+python3 scripts/image-bundle.py export \
+  --platform linux/amd64 --pull-supporting-images \
+  --output /mnt/c/Users/wjw/Downloads/fysics-bundle-2026.09-rc.1-01
+```
+
+If `python` is not found, use the `python3` commands above. If creating `.venv` reports missing `ensurepip`, install `python3-venv` in Ubuntu and repeat environment creation. Existing source checkouts do not require recloning to fix either prerequisite.
 
 The tar can be large. Ensure free space on both machines for the bundle and loaded image layers. It is a Docker image archive, not a backup of live application state. Docker `save`/`load` preserves image layers/tags; container filesystem `export`/`import` is a different operation and is not used here.
 
