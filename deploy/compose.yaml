@@ -1,0 +1,90 @@
+name: feishu-tailnet
+services:
+  db:
+    image: ${POSTGRES_IMAGE:?Set POSTGRES_IMAGE}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: casdoor
+      POSTGRES_USER: casdoor
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+    secrets: [db_password]
+    volumes: [casdoor_db:/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U casdoor -d casdoor"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+  casdoor:
+    image: ${CASDOOR_IMAGE:?Build the patched Casdoor image}
+    restart: unless-stopped
+    user: "${RUN_UID}:${RUN_GID}"
+    depends_on:
+      db: {condition: service_healthy}
+    ports: ["127.0.0.1:8000:8000"]
+    volumes:
+      - ${RUNTIME_DIR}/casdoor/app.conf:/conf/app.conf:ro
+      - ${RUNTIME_DIR}/casdoor/logs:/logs
+    security_opt: [no-new-privileges:true]
+  headscale:
+    image: ${HEADSCALE_IMAGE:?Set HEADSCALE_IMAGE}
+    command: [serve]
+    restart: unless-stopped
+    user: "${RUN_UID}:${RUN_GID}"
+    volumes:
+      - ${RUNTIME_DIR}/headscale/config.yaml:/etc/headscale/config.yaml:ro
+      - ${RUNTIME_DIR}/headscale/policy.json:/etc/headscale/policy.json:ro
+      - ${RUNTIME_DIR}/secrets/headscale_oidc_secret:/run/secrets/oidc_secret:ro
+      - ${RUNTIME_DIR}/headscale/data:/var/lib/headscale
+    tmpfs: [/tmp]
+    healthcheck:
+      test: [CMD, headscale, health]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    security_opt: [no-new-privileges:true]
+  headplane:
+    image: ${HEADPLANE_IMAGE:?Set HEADPLANE_IMAGE}
+    profiles: [apps]
+    restart: unless-stopped
+    user: "${RUN_UID}:${RUN_GID}"
+    depends_on:
+      headscale: {condition: service_healthy}
+    volumes:
+      - ${RUNTIME_DIR}/headplane/config.yaml:/etc/headplane/config.yaml:ro
+      - ${RUNTIME_DIR}/headplane/data:/var/lib/headplane
+      - ${RUNTIME_DIR}/secrets/headplane_oidc_secret:/run/secrets/oidc_secret:ro
+      - ${RUNTIME_DIR}/secrets/headscale_api_key:/run/secrets/headscale_api_key:ro
+      - ${RUNTIME_DIR}/secrets/cookie_secret:/run/secrets/cookie_secret:ro
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+  proxy:
+    image: ${CADDY_IMAGE:?Set CADDY_IMAGE}
+    profiles: [public]
+    restart: unless-stopped
+    ports: ["80:80", "443:443", "443:443/udp"]
+    environment:
+      CASDOOR_HOST: ${CASDOOR_HOST}
+      HEADSCALE_HOST: ${HEADSCALE_HOST}
+      HEADPLANE_HOST: ${HEADPLANE_HOST}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+  worker:
+    image: ${WORKER_IMAGE:-feishu/sync:2026.09-rc.1}
+    profiles: [sync]
+    restart: unless-stopped
+    user: "${RUN_UID}:${RUN_GID}"
+    command: ["--config", "/config/sync.json", "--apply", "--watch"]
+    volumes:
+      - ${RUNTIME_DIR}/sync:/config:ro
+      - ${RUNTIME_DIR}/sync/state:/state
+      - ${RUNTIME_DIR}/secrets:/run/secrets:ro
+    security_opt: [no-new-privileges:true]
+secrets:
+  db_password:
+    file: ${RUNTIME_DIR}/secrets/db_password
+volumes:
+  casdoor_db:
+  caddy_data:
+  caddy_config:

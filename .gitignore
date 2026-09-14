@@ -1,0 +1,7 @@
+.runtime/
+.env
+*.pyc
+__pycache__/
+.venv/
+artifacts/
+backups/

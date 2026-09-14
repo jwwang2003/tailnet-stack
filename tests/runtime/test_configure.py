@@ -1,0 +1,47 @@
+import importlib.util
+import json
+from pathlib import Path
+import tempfile
+import unittest
+ROOT = Path(__file__).resolve().parents[2]
+spec = importlib.util.spec_from_file_location('configure', ROOT / 'scripts/configure.py')
+configure = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(configure)
+
+class ConfigureTests(unittest.TestCase):
+    def setUp(self):
+        self.site = json.loads((ROOT / 'deploy/site.example.json').read_text())
+    def test_rerender_preserves_credentials_policy_and_digest_pins(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            configure.render(self.site, root)
+            secret = (root / 'secrets/cookie_secret').read_text()
+            self.assertEqual(len(secret), 32)
+            policy = root / 'headscale/policy.json'
+            policy.write_text('{"acls": [{"action":"accept"}]}')
+            env = root / 'compose.env'
+            env.write_text(env.read_text().replace('caddy:2.10.2-alpine', 'caddy@sha256:' + 'a'*64))
+            configure.render(self.site, root)
+            self.assertEqual(secret, (root / 'secrets/cookie_secret').read_text())
+            self.assertIn('accept', policy.read_text())
+            self.assertIn('caddy@sha256:', env.read_text())
+            self.assertEqual((root / 'casdoor/app.conf').stat().st_mode & 0o777, 0o600)
+            self.assertFalse((root / 'secrets/headscale_api_key').exists())
+    def test_host_injection_and_collision_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for bad in ('https://example.com', 'example.com\nEVIL=1', '*.example.com'):
+                self.site['casdoor_host'] = bad
+                with self.assertRaises(ValueError):
+                    configure.render(self.site, directory)
+            self.site['casdoor_host'] = self.site['headscale_host']
+            with self.assertRaises(ValueError):
+                configure.render(self.site, directory)
+    def test_default_policy_denies_and_oidc_groups_are_qualified(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = configure.render(self.site, directory)
+            self.assertEqual(json.loads((root / 'headscale/policy.json').read_text())['acls'], [])
+            hs = json.loads((root / 'headscale/config.yaml').read_text())
+            self.assertEqual(hs['oidc']['allowed_groups'], ['employees/tailnet-members'])
+            hp = json.loads((root / 'headplane/config.yaml').read_text())
+            self.assertTrue(hp['oidc']['disable_api_key_login'])
+            self.assertEqual(hp['server']['cookie_max_age'], 300)

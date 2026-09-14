@@ -1,0 +1,10 @@
+{
+  "casdoor_host": "login.example.com",
+  "headscale_host": "vpn.example.com",
+  "headplane_host": "admin.example.com",
+  "tailnet_domain": "tail.example.net",
+  "organization": "employees",
+  "headscale_client_id": "headscale",
+  "headplane_client_id": "headplane",
+  "admission_group": "tailnet-members"
+}

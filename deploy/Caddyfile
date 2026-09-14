@@ -1,0 +1,10 @@
+{$CASDOOR_HOST} {
+    reverse_proxy casdoor:8000
+}
+{$HEADSCALE_HOST} {
+    reverse_proxy headscale:8080
+}
+{$HEADPLANE_HOST} {
+    redir / /admin/ 302
+    reverse_proxy headplane:3000
+}
