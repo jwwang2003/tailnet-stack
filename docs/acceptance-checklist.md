@@ -22,11 +22,19 @@ host. Do not set `compatibility_verified: true` while these checks are pending.
       deployment host; public DNS/TLS and container file permissions are correct.
 - [ ] Initial administrator credentials are replaced, Headplane owner bootstrap
       is restricted, employee registration is controlled, and API keys stay private.
+- [ ] `scripts/casdoor-harden.py` reports no pending changes for the employee
+      organization and both OIDC applications, and `scripts/verify-casdoor-authz.py`
+      exits 0 against the candidate Casdoor image (no ordinary-user change to
+      properties, groups, `isAdmin`, `isForbidden`, or email).
 
 ## Optional Feishu identity and directory lifecycle
 
 - [ ] The Feishu App has the actual required permissions and access range; record
       the expected population and department/group scope.
+- [ ] The worker's `--permissions` preflight against the production app reports
+      `lifecycle_ready: true`; the granted scope list is recorded. If
+      `lifecycle_mode: staged` was used during rollout, the automatic upgrade to
+      `mode: apply` was observed and the admission alias appeared afterwards.
 - [ ] Login-before-sync and sync-before-login produce one stable Casdoor identity
       for the same Feishu app-scoped `open_id`, with no email-only account linking.
 - [ ] Feishu login succeeds through Casdoor and OIDC discovery/signing-key
@@ -53,16 +61,24 @@ host. Do not set `compatibility_verified: true` while these checks are pending.
       approved services; admission claims alone do not grant network access.
 - [ ] Device expiry/reauthentication, subnet routes, exit nodes if used, and DERP
       connectivity work from employees' actual networks.
-- [ ] Offboarding blocks fresh login and revokes existing nodes, preauth keys,
-      affected API keys, routes, and administrative access; test the 300-second
-      Headplane session window and immediate containment procedure separately.
+- [ ] Blocking a test employee through the directory is observed to expire that
+      employee's Headscale nodes and preauth keys automatically, with the counts
+      in the report's `revocation` block; a forced Headscale outage leaves the
+      subject in `pending_revocations` and is retried on the next run.
+- [ ] `--offboard --apply` on a test employee blocks the account, sets the hold,
+      removes managed groups, and revokes nodes immediately; affected API keys,
+      routes, and administrative access are reviewed manually. Test the
+      300-second Headplane session window separately. Without `headscale`
+      configured, record the manual revocation evidence instead.
 - [ ] An employee who did not build the system can follow the handbook to install,
       sign in, reach an approved service, and report a lost device.
 
 ## Operations and recovery
 
 - [ ] Health/OAuth/sync/backup/TLS monitoring produces a useful alert for a forced
-      failure and recovers without repeated unchanged notifications.
+      failure and recovers without repeated unchanged notifications; the worker's
+      Compose healthcheck turns unhealthy after three intervals without a
+      heartbeat and recovers on the next successful interval.
 - [ ] A real backup succeeds with all writers stopped and restores the original
       running services; backup restart-failure handling is exercised.
 - [ ] A real PostgreSQL/SQLite/key/session/sync/Caddy restore succeeds into a fresh

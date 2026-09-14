@@ -30,7 +30,11 @@ worker implements Feishu only; it is not a generic directory connector.
 4. If using Feishu, follow the [Feishu setup recipe](docs/deployment.md),
    [identity contract](docs/identity-contract.md), and [worker guide](sync/README.md).
    The [employee-directory guide](docs/feishu-employee-directory.md) covers 部门、职务、工号,
-   phone and email. Directory reads require approved app permissions and scope.
+   phone and email. Directory reads require approved app permissions and scope:
+   the worker's `--permissions` preflight lists the Feishu scopes still missing and
+   a link to request them, and `lifecycle_mode: "staged"` imports users while a
+   grant is pending, switching to full lifecycle synchronization automatically once
+   employment status becomes readable.
 5. Complete [acceptance](docs/acceptance-checklist.md) and a backup/restore rehearsal
    before production promotion. Customize the [employee handbook](docs/employee-handbook.md)
    for the provider, URLs, and client versions you actually deploy.

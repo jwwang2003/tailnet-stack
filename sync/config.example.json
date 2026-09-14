@@ -26,10 +26,18 @@
   "interval_seconds": 300,
   "missing_confirmations": 2,
   "allow_reenable": false,
+  "lifecycle_mode": "strict",
   "http_timeout_seconds": 30,
   "http_attempts": 3,
   "employee_profile": {
     "enabled": false,
     "catalog_lookup": false
+  },
+  "headscale": {
+    "base_url": "http://headscale:8080",
+    "api_key_file": "/run/secrets/headscale_api_key",
+    "issuer": "https://login.example.com",
+    "on_block": "expire",
+    "revoke_preauth_keys": true
   }
 }

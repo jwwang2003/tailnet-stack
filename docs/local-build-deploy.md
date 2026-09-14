@@ -56,10 +56,10 @@ sudo apt-get update
 sudo apt-get install -y git python3 python3-venv
 mkdir -p "$HOME/tailscale-open"
 cd "$HOME/tailscale-open"
-git clone --branch release/integrated-2026.09-rc.1 https://github.com/jwwang2003/headscale.git
-git clone --branch release/integrated-2026.09-rc.1 https://github.com/jwwang2003/headplane.git
-git clone --branch release/integrated-2026.09-rc.1 https://github.com/jwwang2003/casdoor.git
-git clone --branch release/integrated-2026.09-rc.1 https://github.com/jwwang2003/tailscale-feishu-integration.git
+git clone --branch release/integrated-2026.09-rc.2 https://github.com/jwwang2003/headscale.git
+git clone --branch release/integrated-2026.09-rc.2 https://github.com/jwwang2003/headplane.git
+git clone --branch release/integrated-2026.09-rc.2 https://github.com/jwwang2003/casdoor.git
+git clone --branch release/integrated-2026.09-rc.2 https://github.com/jwwang2003/tailscale-feishu-integration.git
 cd tailscale-feishu-integration
 python3 -m venv .venv
 . .venv/bin/activate
@@ -93,13 +93,13 @@ Still in local WSL:
 python3 scripts/image-bundle.py export \
   --platform linux/amd64 \
   --pull-supporting-images \
-  --output /mnt/c/Users/wjw/Downloads/fysics-bundle-2026.09-rc.1-01
+  --output /mnt/c/Users/wjw/Downloads/fysics-bundle-2026.09-rc.2-01
 ```
 
 Adjust `/mnt/c/Users/wjw` if your Windows profile is elsewhere. Use a **new output directory** each time; exports refuse to overwrite an existing bundle. The output appears in Windows as:
 
 ```text
-C:\Users\wjw\Downloads\fysics-bundle-2026.09-rc.1-01\
+C:\Users\wjw\Downloads\fysics-bundle-2026.09-rc.2-01\
   images.tar
   manifest.json
 ```
@@ -112,7 +112,7 @@ Only export after the build succeeds. To enforce this when pasting both steps, c
 BUILD_PLATFORM=linux/amd64 bash scripts/build-products.sh .. &&
 python3 scripts/image-bundle.py export \
   --platform linux/amd64 --pull-supporting-images \
-  --output /mnt/c/Users/wjw/Downloads/fysics-bundle-2026.09-rc.1-01
+  --output /mnt/c/Users/wjw/Downloads/fysics-bundle-2026.09-rc.2-01
 ```
 
 If `python` is not found, use the `python3` commands above. If creating `.venv` reports missing `ensurepip`, install `python3-venv` in Ubuntu and repeat environment creation. Existing source checkouts do not require recloning to fix either prerequisite.
@@ -124,7 +124,7 @@ The tar can be large. Ensure free space on both machines for the bundle and load
 Open a separate **Windows PowerShell** terminal:
 
 ```powershell
-scp -r "C:\Users\wjw\Downloads\fysics-bundle-2026.09-rc.1-01" "wjw@8.133.246.13:~/"
+scp -r "C:\Users\wjw\Downloads\fysics-bundle-2026.09-rc.2-01" "wjw@8.133.246.13:~/"
 ```
 
 Use your working SSH key/alias if necessary. For example, add `-i "C:\Users\wjw\.ssh\YOUR_SERVER_KEY.pem"`; for a nonstandard SSH port use `scp -P PORT` (uppercase P).
@@ -132,8 +132,8 @@ Use your working SSH key/alias if necessary. For example, add `-i "C:\Users\wjw\
 This transfer uses SSH directly and does not need the port-7890 reverse proxy. Copy the **whole folder**, including its manifest. After transfer, the server should have:
 
 ```text
-/home/wjw/fysics-bundle-2026.09-rc.1-01/images.tar
-/home/wjw/fysics-bundle-2026.09-rc.1-01/manifest.json
+/home/wjw/fysics-bundle-2026.09-rc.2-01/images.tar
+/home/wjw/fysics-bundle-2026.09-rc.2-01/manifest.json
 ```
 
 ## 7. Prepare only the integration checkout on the server
@@ -144,7 +144,7 @@ If the integration checkout already exists:
 
 ```sh
 cd "$HOME/tailscale-open/tailscale-feishu-integration"
-git fetch origin release/integrated-2026.09-rc.1
+git fetch origin release/integrated-2026.09-rc.2
 ```
 
 For a fresh server, install the runtime tools using [deployment steps 1–3](deployment.md), then clone only the integration repository. Git checkout still needs GitHub connectivity; the image-import/start path does not need registry access.
@@ -155,7 +155,7 @@ Check out the exact integration commit recorded in the bundle (preserve any exis
 bundle_commit=$(python3 - <<'PY'
 import json, re
 from pathlib import Path
-p = Path.home() / 'fysics-bundle-2026.09-rc.1-01/manifest.json'
+p = Path.home() / 'fysics-bundle-2026.09-rc.2-01/manifest.json'
 commit = json.loads(p.read_text())['integration_commit']
 assert re.fullmatch(r'[0-9a-f]{40}', commit)
 print(commit)
@@ -195,7 +195,7 @@ Import the transferred bundle:
 
 ```sh
 python3 scripts/image-bundle.py import \
-  --bundle "$HOME/fysics-bundle-2026.09-rc.1-01" \
+  --bundle "$HOME/fysics-bundle-2026.09-rc.2-01" \
   --runtime .runtime
 ```
 
@@ -205,7 +205,7 @@ Run the separate pre-start check:
 
 ```sh
 python3 scripts/image-bundle.py check \
-  --bundle "$HOME/fysics-bundle-2026.09-rc.1-01" \
+  --bundle "$HOME/fysics-bundle-2026.09-rc.2-01" \
   --runtime .runtime
 ```
 

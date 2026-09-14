@@ -15,7 +15,7 @@ components:
     tag: "v0.29.3"
     upstream_commit: "5aff68b5b9921db5ccb88013bb1740077ab872fb"
     source_commit: "5951677674dcff51a463b0a61496d7bef1a3e917"
-    image: "tailnet/headscale:2026.09-rc.1"
+    image: "tailnet/headscale:2026.09-rc.2"
     image_digest: null
   headplane:
     upstream: "https://github.com/tale/headplane"
@@ -23,13 +23,13 @@ components:
     tag: "v0.7.1"
     upstream_commit: "30c842ed8dbf011e78596e3a474133ec4069ba79"
     source_commit: "fb7ae3e200b565e1d8ee04a9f1729fe84580b9e0"
-    image: "tailnet/headplane:2026.09-rc.1"
+    image: "tailnet/headplane:2026.09-rc.2"
     image_digest: null
   casdoor:
     upstream: "https://github.com/casdoor/casdoor"
     fork: "https://github.com/jwwang2003/casdoor"
     tag: "v4.3.0"
     upstream_commit: "270882288296b9611e579a931242ff65f104c29b"
-    source_commit: "35edcab09e3e6c55a92b7b4c15a14b4958e51ca3"
-    image: "tailnet/casdoor:2026.09-rc.1"
+    source_commit: "fde2cf8f94d95dbc0e8da5e3744ef1c4f6a32e94"
+    image: "tailnet/casdoor:2026.09-rc.2"
     image_digest: null

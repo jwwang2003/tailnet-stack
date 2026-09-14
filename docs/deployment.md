@@ -6,7 +6,7 @@ For a deployment without Feishu, start with the [Integrated Tailnet deployment g
 
 This guide takes a **new Ubuntu 24.04 x86-64 server** from an empty installation to a pilot with Feishu login, Casdoor user synchronization, Headscale device enrollment, and Headplane administration. Run server commands as the same non-root deployment user throughout. Steps explicitly marked **laptop** or **browser** run elsewhere.
 
-This is the `2026.09-rc.1` deployment. Local code/configuration tests have passed; a real Feishu tenant login and a complete container/restore rehearsal have not yet been performed. The checkpoints below are intended to produce that evidence. Do not replace patched images with stock Casdoor or Headscale images.
+This is the `2026.09-rc.2` deployment. Local code/configuration tests have passed; a real Feishu tenant login and a complete container/restore rehearsal have not yet been performed. The checkpoints below are intended to produce that evidence. Do not replace patched images with stock Casdoor or Headscale images.
 
 ## 1. Fill in your deployment worksheet
 
@@ -69,7 +69,7 @@ If the laptop does not have the repository, download the helper using your local
 
 ```sh
 curl --fail --location --proxy http://127.0.0.1:7890 \
-  https://raw.githubusercontent.com/jwwang2003/tailscale-feishu-integration/release/integrated-2026.09-rc.1/scripts/remote-proxy-shell.sh \
+  https://raw.githubusercontent.com/jwwang2003/tailscale-feishu-integration/release/integrated-2026.09-rc.2/scripts/remote-proxy-shell.sh \
   -o remote-proxy-shell.sh
 less remote-proxy-shell.sh
 bash remote-proxy-shell.sh wjw@YOUR_SERVER_IP
@@ -101,7 +101,7 @@ SSH aliases and identity/jump-host settings from `~/.ssh/config` work. The scrip
 printf 'Proxy: %s\n' "$https_proxy"
 ss -ltn '( sport = :17890 )'
 curl --head --fail --max-time 20 https://github.com
-git ls-remote https://github.com/jwwang2003/tailscale-feishu-integration.git refs/heads/release/integrated-2026.09-rc.1
+git ls-remote https://github.com/jwwang2003/tailscale-feishu-integration.git refs/heads/release/integrated-2026.09-rc.2
 ```
 
 Expected: proxy URL `http://127.0.0.1:17890`, a loopback listener, an HTTPS response, and a Git commit/ref. Adjust the `ss` port if you selected another port. If forwarding fails, confirm the local proxy is running, the remote port is unused, and SSH server policy permits remote TCP forwarding. Keep `GatewayPorts` disabled or `clientspecified`; do not force wildcard listeners. No cloud firewall opening for port 17890 is needed.
@@ -166,10 +166,10 @@ For a **new server checkout**:
 ```sh
 mkdir -p "$HOME/tailscale-open"
 cd "$HOME/tailscale-open"
-git clone --branch release/integrated-2026.09-rc.1 https://github.com/jwwang2003/headscale.git
-git clone --branch release/integrated-2026.09-rc.1 https://github.com/jwwang2003/headplane.git
-git clone --branch release/integrated-2026.09-rc.1 https://github.com/jwwang2003/casdoor.git
-git clone --branch release/integrated-2026.09-rc.1 https://github.com/jwwang2003/tailscale-feishu-integration.git
+git clone --branch release/integrated-2026.09-rc.2 https://github.com/jwwang2003/headscale.git
+git clone --branch release/integrated-2026.09-rc.2 https://github.com/jwwang2003/headplane.git
+git clone --branch release/integrated-2026.09-rc.2 https://github.com/jwwang2003/casdoor.git
+git clone --branch release/integrated-2026.09-rc.2 https://github.com/jwwang2003/tailscale-feishu-integration.git
 cd tailscale-feishu-integration
 python3 -m venv .venv
 . .venv/bin/activate
@@ -242,6 +242,7 @@ Generated files:
 | `.runtime/secrets/headplane_oidc_secret` | Headplane's future Casdoor client secret |
 | `.runtime/secrets/cookie_secret` | Headplane session secret |
 | `.runtime/headscale/data`, `.runtime/headplane/data`, `.runtime/sync/state` | Persistent application/worker state |
+| `.runtime/casdoor/files` | Casdoor local uploads, mounted at `/files` so they persist and are included in backups |
 
 The generator preserves existing secrets, policy, and image pins. It **rewrites service configuration**: back up manual configuration edits before rerendering. Do not delete `.runtime` as a troubleshooting shortcut.
 
@@ -253,10 +254,10 @@ If registry access requires your Windows proxy, complete [the Docker tunnel setu
 
 ```sh
 bash scripts/build-products.sh ..
-docker image inspect tailnet/headscale:2026.09-rc.1 --format '{{.Id}}'
-docker image inspect tailnet/headplane:2026.09-rc.1 --format '{{.Id}}'
-docker image inspect tailnet/casdoor:2026.09-rc.1 --format '{{.Id}}'
-docker image inspect tailnet/sync:2026.09-rc.1 --format '{{.Id}}'
+docker image inspect tailnet/headscale:2026.09-rc.2 --format '{{.Id}}'
+docker image inspect tailnet/headplane:2026.09-rc.2 --format '{{.Id}}'
+docker image inspect tailnet/casdoor:2026.09-rc.2 --format '{{.Id}}'
+docker image inspect tailnet/sync:2026.09-rc.2 --format '{{.Id}}'
 ```
 
 Each inspect command should print an image ID. The script checks clean, matching source commits before building. Go, Node, and frontend build tools run inside the builders; a host Go installation is not required for this image path.
@@ -299,18 +300,30 @@ Keep the public proxy stopped until the password is changed. Keep the built-in a
 
 **Browser:** open the [Feishu developer console](https://open.feishu.cn/app), create a **custom enterprise app / 企业自建应用**, and name it, for example, `Company VPN`. Use the app's web-login capability; no Feishu SAML administrator configuration is involved.
 
-Record the **App ID** (`cli_...`). Use the same app for login and directory import. In Permissions & Scopes / 权限管理, request the API capabilities needed by the actual worker calls:
+Record the **App ID** (`cli_...`). Use the same app for login and directory import. In Permissions & Scopes / 权限管理, request the scopes the worker's Contact v3 calls need. Any one scope per row suffices; the first is the narrowest. "Broad" means `contact:contact:readonly_as_app`, `contact:contact:readonly`, or `contact:contact:access_as_app`.
 
-| Required data | Worker/API operation | What must be returned |
+| Feature | What must be returned | Scopes |
 | --- | --- | --- |
-| Basic user identity | OAuth login and Contact users | Nonempty `open_id` |
-| User department/status | `contact/v3/users/find_by_department` | `status.is_activated`, `is_frozen`, `is_resigned`, `is_exited` |
-| Department tree | `contact/v3/departments/{id}/children` | `open_department_id`, name, parent |
-| App Contact scope | `contact/v3/scopes` | Authorized departments/users/groups and pagination |
-| Contact user groups, if used | `contact/v3/group/simplelist`, group member `simplelist` | Selected group IDs and complete members |
-| Email, if desired | Contact/OAuth profile | `email` or `enterprise_email`, under the applicable field permission |
+| Directory read (`contact/v3/users/find_by_department`, `contact/v3/scopes`) | Nonempty `open_id`; authorized departments/users/groups | `contact:contact.base:readonly`, or broad |
+| Department tree (`contact/v3/departments/{id}/children`) | `open_department_id`, name | `contact:department.base:readonly`, or broad |
+| User name/avatar | `name`, `avatar` | `contact:user.base:readonly`, or broad |
+| Department memberships and 直属上级 | `department_ids`, `leader_user_id` | `contact:user.department:readonly`, or broad |
+| Employment status, required for lifecycle, admission, and offboarding | `status.is_activated`, `is_frozen`, `is_resigned`, `is_exited` | `contact:user.employee:readonly`, or broad |
+| 职务 and enterprise email | `job_title`, `enterprise_email` | `contact:user.employee:readonly`, or broad |
+| 工号 | `employee_no` | `contact:user.employee_number:read`, `contact:user.employee:readonly`, or broad |
+| Email | `email` | `contact:user.email:readonly` |
+| 手机号 | `mobile` | `contact:user.phone:readonly` |
+| Company name verification, only with `feishu.expected_tenant_name` | `tenant/v2/tenant/query` name | `tenant:tenant:readonly` |
+| Contact user groups, only with non-empty `feishu.group_ids` | `contact/v3/group/simplelist`, group member `simplelist` | `contact:group:readonly`, or broad |
+| Job level/family catalogs, only with `employee_profile.catalog_lookup` | `job_levels`, `job_families` | `contact:job_level:readonly` and `contact:job_family:readonly` |
 
-The native import's documented starting permissions are `contact:user.base:readonly` and `contact:department.base:readonly`. Additional fields and group/scope endpoints may require further grants. Use the permission list on each endpoint in the Feishu API Explorer to select the permissions available to **your tenant**, then publish a new app version and approve its data scope. Do not assume those two base permissions expose employee status, groups, or the whole company.
+The worker does not use the Directory API (`directory:employee:read` family); grants there do not expose status or job title to the Contact v3 calls. Do not assume the two base permissions `contact:user.base:readonly` and `contact:department.base:readonly` expose employee status, groups, or the whole company. After step 12 creates the worker configuration, the preflight shows exactly what is still missing:
+
+```sh
+stack --profile sync run --rm worker --config /config/sync.json --permissions
+```
+
+It prints the granted scopes, `missing` per feature, `missing_scopes`, `lifecycle_ready`, and `grant_url`. Open `grant_url` (the same `https://open.feishu.cn/app/<app_id>/auth?q=<scopes>&op_from=openapi&token_type=tenant` link Feishu prints in its 99991672 errors) in the developer console to request exactly the missing scopes, then publish the app version and have the tenant administrator approve it; rerun the preflight until `lifecycle_ready` is true. As an example only, one Fysics tenant was missing exactly `contact:user.employee:readonly` and `contact:user.phone:readonly`, plus `tenant:tenant:readonly` for company-name verification; your tenant may differ.
 
 For the simplest first pilot, use **department-only admission**; Contact-group permissions can be added later. Restrict app availability to the first owner during bootstrap, while granting the directory scope needed to inspect the pilot departments. App availability and Contact data scope are separate settings.
 
@@ -335,7 +348,7 @@ App ID is not the secret. Do not put the App Secret in `site.json`, source files
 
 **Browser, still through the private tunnel:**
 
-1. Open **Organizations**, add an organization with **Name** `employees` and a recognizable display name. Keep user IDs immutable. Set account modification rules for provider bindings, groups, and custom properties to administrator-only. Employees must not edit `headplane_role`, `feishu_sync_*`, or `lark`.
+1. Open **Organizations**, add an organization with **Name** `employees` and a recognizable display name. Keep user IDs immutable. Set account modification rules for provider bindings, groups, and custom properties to administrator-only. Employees must not edit `headplane_role`, `feishu_sync_*`, or `lark`. Step 11 enforces this with `scripts/casdoor-harden.py`; the manual setting is a fallback.
 2. Open **Certificates**, add a JWT-signing certificate, choose RSA of at least 2048 bits, and give it a name such as `cert-tailnet`. Record the name. Do not use weak-key compatibility in Headplane.
 3. Open **Providers**, add an **OAuth** provider with **Type = Lark**, **Name = feishu**, **Client ID = your cli_... App ID**, and **Client secret = the Feishu App Secret**. Set **Use global endpoint = off/false** so it uses `open.feishu.cn`.
 4. In the Feishu app console, configure the web-login redirect URI as `https://login.example.com/callback` (replace the hostname). This is Casdoor's Lark callback. The Headscale and Headplane callbacks belong in Casdoor applications, not in the Feishu app.
@@ -470,6 +483,23 @@ python .runtime/casdoor-api.py update-application --query id=admin/app-headplane
 
 These files contain client secrets: keep them in `.runtime`. The `email_verified` value remains the user's actual boolean; native Feishu import does not automatically verify email. This deployment uses stable subjects and admission groups, so do not fabricate email verification. Headscale may omit an unverified email from its profile; that does not prevent subject-based linking. If you add email/domain filters later, define a genuine email-verification procedure first.
 
+Now harden the organization and both OIDC applications with the service credentials. The script runs on the server from the integration checkout (it is not part of the worker image) and reads only the `casdoor` block, plus `admission_group`, of a worker-style configuration, so give it host-resolvable values:
+
+```sh
+python - <<'PY'
+import json
+from pathlib import Path
+p = Path('.runtime/casdoor-host.json')
+p.write_text(json.dumps({'casdoor': {'base_url': 'http://127.0.0.1:8000', 'organization': 'employees', 'client_id': 'feishu-sync',
+    'client_secret_file': '.runtime/secrets/casdoor_sync_client_secret'}, 'admission_group': 'tailnet-members'}, indent=2))
+p.chmod(0o600)
+PY
+python scripts/casdoor-harden.py --config .runtime/casdoor-host.json
+python scripts/casdoor-harden.py --config .runtime/casdoor-host.json --apply
+```
+
+The first command lists the planned changes; `--apply` writes them. On organization `employees` it sets the directory-managed account items (display name, first/last name, avatar, email, phone, country code/region, location, addresses, affiliation, title, ID card fields, real name, ID verification, homepage, bio, gender, birthday, education, score, karma, ranking, managed accounts, Face ID, WebAuthn credentials, MFA accounts, 3rd-party logins) to Admin-only modification, keeps Properties, Is admin, Is forbidden, Is deleted, IP whitelist, and Need update password Admin-only for both view and modify, leaves password, language, and MFA self-service (cart, transactions, and balance items also stay self-service, because the pinned Casdoor would otherwise reject every ordinary profile save), and sets `isProfilePublic` to false. On every interactive application of the organization (the worker's client-credentials application is skipped) it sets each provider's `bindingRule` to `[]` and `canSignUp` to false, so an unlinked Feishu login is refused instead of being attached to an existing account by email, phone, or username (the worker and the native import link by `lark` open_id only), and disables Face ID, WebAuthn, verification-code sign-in, and sign-up. Rerun both commands after editing the organization or an application in the Casdoor UI, because the UI may reset `bindingRule` to null. Residual behaviour: an employee whose account has not been imported yet sees a login message that the account does not exist, is not allowed to sign up, and should contact IT support; with the worker scheduled (step 17) that window is at most one interval.
+
 ## 12. Configure the native importer and the worker
 
 Start from the worker example:
@@ -507,12 +537,22 @@ For a first **department-only** pilot, use this shape with your values:
   "interval_seconds": 300,
   "missing_confirmations": 2,
   "allow_reenable": false,
+  "lifecycle_mode": "staged",
   "http_timeout_seconds": 30,
-  "http_attempts": 3
+  "http_attempts": 3,
+  "headscale": {
+    "base_url": "http://headscale:8080",
+    "api_key_file": "/run/secrets/headscale_api_key",
+    "issuer": "https://login.example.com",
+    "on_block": "expire",
+    "revoke_preauth_keys": true
+  }
 }
 ```
 
 `tenant_key` here binds local state to an operator-selected tenant label; the worker does not attest this string through the API. Feishu app credentials and granted scope determine the real tenant boundary. Keep the label stable.
+
+`lifecycle_mode` decides what happens while the app cannot read employment status. `staged`, used here for the initial rollout, imports users and profiles and skips admission, roles, and offboarding until every user carries complete status, then upgrades itself to full runs automatically; `strict` (the default) fails such runs and writes nothing. Set `strict` once lifecycle has been verified, or keep `staged` if you accept the automatic upgrade. The `headscale` section makes a block also expire the employee's Headscale nodes and preauth keys; `issuer` must equal the Casdoor issuer (`https://login.example.com` here, replaced with your hostname), because Headscale identifies OIDC users as `issuer/subject`. The section is used only when a run blocks a user; its key file is created in step 14, before continuous synchronization starts in step 17. Omit the section to keep manual revocation per the operations runbook. Both settings are described in the [worker guide](../sync/README.md).
 
 Get the pilot **open_department_id** from the Feishu API Explorer by calling “Get department / 获取部门信息” or “Get sub-departments / 获取子部门列表” with `department_id_type=open_department_id`. Root `0` is a traversal root, not an allowed admission department. `od_...` is an identifier; a department name such as `Engineering` is not interchangeable. If your app cannot read the whole tree, use the explicitly granted root department IDs instead of `0`.
 
@@ -572,13 +612,21 @@ python .runtime/casdoor-api.py get-syncer --query id=admin/feishu --query organi
 
 For a fresh setup, `add-syncer` should report OK. If `admin/feishu` already exists, inspect that object and use `update-syncer --query id=admin/feishu --body .runtime/native-syncer.json` only when it is the importer you intend to replace. Verify `host`, `user`, `isEnabled`, `isReadOnly`, and the columns in the saved check file privately. Do not enable its native scheduler: the worker invokes it serially.
 
+Run the permission preflight and compare it with the table in step 8:
+
+```sh
+stack --profile sync run --rm worker --config /config/sync.json --permissions
+```
+
+Expected: `"status":"ok"`, `"mode":"permissions"`, and a `permissions` block. If `lifecycle_ready` is false, open `grant_url`, request the scopes, publish the app version, and obtain the tenant administrator's approval. You can continue with `lifecycle_mode: "staged"` while that approval is pending; with `strict` the runs below fail until `lifecycle_ready` is true.
+
 Run the first dry run:
 
 ```sh
 stack --profile sync run --rm worker --config /config/sync.json
 ```
 
-Expected: one JSON report with `"status":"ok"`, `"mode":"dry-run"`. On an empty organization, `unlinked_source_users` is expected: dry run does not create users. Confirm department/user counts match the granted population. If there is any error, use the troubleshooting table before applying.
+Expected: one JSON report with `"status":"ok"` and `"mode":"dry-run"`, or `"mode":"dry-run-staged"` with `"lifecycle":"skipped"` while status is unavailable in staged mode. On an empty organization, `unlinked_source_users` is expected: dry run does not create users. Confirm department/user counts match the granted population. If there is any error, use the troubleshooting table before applying.
 
 Then perform the first import:
 
@@ -586,9 +634,9 @@ Then perform the first import:
 stack --profile sync run --rm worker --config /config/sync.json --apply
 ```
 
-Expected: `"status":"ok"`, `"mode":"apply"`; `unlinked_source_users` should be zero for the selected scope. In Casdoor → Users → employees, inspect the owner account: `lark` must equal Feishu `open_id`, ID must be nonempty, and groups must include `employees/tailnet-members`. Group names are stable ID-based names, such as `feishu-department-od_...`.
+Expected: `"status":"ok"`, `"mode":"apply"`; `unlinked_source_users` should be zero for the selected scope. In Casdoor → Users → employees, inspect the owner account: `lark` must equal Feishu `open_id`, ID must be nonempty, and groups must include `employees/tailnet-members`. Group names are stable ID-based names, such as `feishu-department-od_...`. A staged report (`"mode":"apply-staged"`, `"lifecycle":"skipped"`) creates and links the users but assigns no groups; the owner then cannot enroll a device in step 15 until the status scope is approved and a full run has assigned `employees/tailnet-members`.
 
-Repeat `--apply`; with no changes the worker should converge to `operations: 0`. If not, inspect the specific import/membership change rather than starting the schedule immediately.
+Repeat `--apply`; with no changes the worker should converge to `operations: 0` (a staged report shows `profile_updates: 0` instead). If not, inspect the specific import/membership change rather than starting the schedule immediately.
 
 ## 13. Switch Casdoor to public HTTPS
 
@@ -649,7 +697,7 @@ print('API key file is nonempty and contains one value; key not printed.')
 PY
 ```
 
-Do not generate this key again on every restart. It is an administrative credential used by Headplane's backend. Note its 90-day expiry and follow the rotation instructions in [operations](operations.md).
+Do not generate this key again on every restart. It is an administrative credential used by Headplane's backend. Note its 90-day expiry and follow the rotation instructions in [operations](operations.md). The worker's `headscale` section reads the same file to expire the nodes of blocked employees; after a rotation replace the file and restart both Headplane and the worker.
 
 ## 15. Enroll the first device and bootstrap Headplane ownership
 
@@ -720,7 +768,7 @@ stack --profile '*' ps
 stack logs --tail 50 worker
 ```
 
-Expected: a successful JSON report approximately every 300 seconds. Alert if no full successful run occurs for two intervals. A permission-scope change intentionally stops reconciliation and requires operator review; do not erase state to make the error disappear.
+Expected: a successful JSON report approximately every 300 seconds. While `lifecycle_mode` is `staged` and status is still unavailable, each report shows `"mode":"apply-staged"` and `"lifecycle":"skipped"`: new employees are created and profiles updated, but nobody receives `employees/tailnet-members`, so nobody new can enroll. Once the tenant administrator has approved the missing scopes and every user carries complete status, the next interval reports `"mode":"apply"` and assigns admission, roles, and offboarding without a configuration change or restart; verify the owner's groups and the first employee's enrollment at that point, and consider setting `strict`. After every successful applied interval the worker writes `/state/sync-state.json.heartbeat.json` (`.runtime/sync/state` on the host); the Compose healthcheck marks the worker unhealthy when no success occurred within three intervals, which `stack ps` shows. Alert externally if no full successful run occurs for two intervals. A permission-scope change intentionally stops reconciliation and requires operator review; do not erase state to make the error disappear.
 
 Create a protected backup outside `.runtime`:
 
@@ -744,17 +792,29 @@ Exercise a fresh-project restore with [the operations runbook](operations.md) be
 | Private browser redirects to HTTPS too early | `origin` and `originFrontend` | Use step 7's temporary loopback origin, then restart Casdoor |
 | Native syncer wrong endpoint | Stored syncer `host` | Explicitly set `https://open.feishu.cn` through API/import |
 | Worker rejects columns | Native `tableColumns` | Exactly one Lark key; profile fields hashed; no worker-owned fields |
-| Worker missing status/scope/group data | Feishu API Explorer response and grants | Grant/publish required endpoint and field permissions; check data scope |
+| Worker error `user status is incomplete` (strict mode) | `--permissions` output: `missing`, `grant_url` | Request the named scope (usually `contact:user.employee:readonly`) through `grant_url`, publish, and get it approved; or set `lifecycle_mode` to `staged` for a staged rollout |
+| Report shows `lifecycle: skipped` | `missing_scopes`, `grant_url`, `users_without_status` in the report | Expected in staged mode until the status scope is effective: users are imported, admission is not assigned. Request and approve the scopes; the next interval upgrades to `mode: apply` by itself |
+| Worker missing scope/group data | Feishu API Explorer response and grants | Grant/publish required endpoint and field permissions; check data scope |
 | `unlinked_source_users` stays nonzero after apply | Casdoor `lark`, native logs, app ID | Use patched Casdoor and the same Feishu app; audit old wrong bindings, never auto-merge email |
 | OAuth redirect mismatch | Browser redirect destination, both consoles | Feishu → Casdoor `/callback`; each Casdoor client → its own downstream callback |
 | Headscale restart loop | `stack logs --tail 80 headscale` and issuer discovery | Fix Casdoor/DNS/TLS; do not enable fallback authentication |
 | Headplane invalid API key | Key file/expiry and server URL | Generate/rotate a valid server key and recreate Headplane |
 | Employee cannot open Headplane | Expected role | `member` has no UI; verify only authorized operator mappings |
 | Connected but resource unreachable | Policy, resource port, route, DNS | Start with one explicit IP/port test and inspect Headscale logs |
-| Role/account change did not cut an existing VPN connection | Existing nodes/preauth keys | Revoke those separately per offboarding runbook; broker disablement is not device revocation |
+| Error `Headscale revocation is pending` | Report `revocation.pending`, state `pending_revocations`, `headscale.base_url`, API key file and expiry | The Casdoor block is already applied. Restore Headscale reachability or rotate the API key and restart the worker; the revocation is retried every interval. Revoke manually per the offboarding runbook if it cannot wait |
+| Login says the account does not exist and is not allowed to sign up | Employee's `lark` binding in Casdoor, latest worker report, Feishu data scope | Expected for an employee not yet imported: hardened applications refuse fallback binding by email/phone/name. Wait for the next interval or run `--apply` once, and confirm the employee is inside the app's Contact data scope. Never bind manually by email |
+| Role/account change did not cut an existing VPN connection | Worker `headscale` section, `revocation` in the report, existing nodes/preauth keys | With `headscale` configured, a block expires nodes and preauth keys automatically; otherwise revoke per the offboarding runbook. A role change alone never expires nodes; Headplane sessions expire through the cookie max age |
 
 ## 19. What qualifies this for production
 
-Complete [the acceptance checklist](acceptance-checklist.md): real Feishu login, both OIDC clients, identity preservation, role boundaries, nested/multiple departments, a membership change, a disabled employee, existing device/session revocation, a restore drill, and an employee walkthrough.
+Complete [the acceptance checklist](acceptance-checklist.md): real Feishu login, both OIDC clients, identity preservation, role boundaries, nested/multiple departments, a membership change, a disabled employee, existing device/session revocation, a `--permissions` report with `lifecycle_ready: true`, an observed automatic node revocation, a restore drill, and an employee walkthrough.
+
+Run the authorization regression probe against the candidate Casdoor image before promotion, using the host configuration from step 11:
+
+```sh
+python scripts/verify-casdoor-authz.py --config .runtime/casdoor-host.json
+```
+
+It creates a temporary password-login application, group, and user in `employees`, signs in as that ordinary user, attempts the partial-update bypasses (properties via columns, same-length groups via columns, `isAdmin`, `isForbidden`, `email`, and a full-object update), verifies through the administrative API that nothing changed, deletes the temporary objects (`--keep` retains them for inspection), and exits 1 on any bypass. Add `--public-url https://login.example.com` to run the employee session through the public proxy. The worker ignores the probe user because it has no `lark` binding. Against the unfixed Casdoor v4.3.0 image the probe demonstrated that an ordinary user could set `properties.headplane_role` to `admin` and replace `groups` with the admission alias; the downstream commit `fde2cf8f` pinned in `versions.lock.yaml` (User.DeepCopy in UpdateUser) fixes this, and the probe must pass on the candidate image.
 
 Record actual container image digests and the test evidence in a copy of `releases/manifest.example.yaml`. The checker refuses incomplete production promotion. Keep the current RC status until those checks pass; creating or pushing a release branch does not prove a production deployment.

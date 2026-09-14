@@ -63,7 +63,7 @@ Only after the build succeeds:
 python3 scripts/image-bundle.py export --engine podman \
   --platform linux/amd64 \
   --pull-supporting-images \
-  --output /mnt/c/Users/wjw/Downloads/fysics-bundle-2026.09-rc.1-01
+  --output /mnt/c/Users/wjw/Downloads/fysics-bundle-2026.09-rc.2-01
 ```
 
 Or chain both steps:
@@ -72,7 +72,7 @@ Or chain both steps:
 CONTAINER_ENGINE=podman BUILD_PLATFORM=linux/amd64 bash scripts/build-products.sh .. &&
 python3 scripts/image-bundle.py export --engine podman \
   --platform linux/amd64 --pull-supporting-images \
-  --output /mnt/c/Users/wjw/Downloads/fysics-bundle-2026.09-rc.1-01
+  --output /mnt/c/Users/wjw/Downloads/fysics-bundle-2026.09-rc.2-01
 ```
 
 The exporter uses `podman image save --format docker-archive --multi-image-archive` for all six images and normalizes Podman's image ID representation. The supporting PostgreSQL/Caddy pulls also use fully qualified Docker Hub names. Use a new output directory for every bundle.
@@ -85,9 +85,9 @@ Use the PowerShell `scp` and remote import/check steps in [local build/deploy](l
 
 ```sh
 python3 scripts/image-bundle.py import \
-  --bundle "$HOME/fysics-bundle-2026.09-rc.1-01" --runtime .runtime
+  --bundle "$HOME/fysics-bundle-2026.09-rc.2-01" --runtime .runtime
 python3 scripts/image-bundle.py check \
-  --bundle "$HOME/fysics-bundle-2026.09-rc.1-01" --runtime .runtime
+  --bundle "$HOME/fysics-bundle-2026.09-rc.2-01" --runtime .runtime
 ```
 
 Remote import/check deliberately uses Docker; `--engine podman` applies only to local export. Keep `deploy/compose.offline.yaml` in server Compose commands so it cannot pull missing images.

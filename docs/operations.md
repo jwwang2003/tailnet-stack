@@ -90,9 +90,32 @@ the configured `organization/admission_group` entry. An employee's email must be
 verified through the selected trusted source; do not bypass Headscale's verified
 email requirement merely to make a test login succeed.
 
+After creating the applications, enforce the account policy with the hardening
+script, first as a dry run and then with `--apply`. It runs on the host and needs
+a small configuration with the Casdoor loopback origin and the service secret
+path (see the [Feishu deployment guide](deployment.md), step 11):
+
+```sh
+python3 scripts/casdoor-harden.py --config .runtime/casdoor-host.json
+python3 scripts/casdoor-harden.py --config .runtime/casdoor-host.json --apply
+```
+
+It makes directory-managed account items Admin-only, keeps password, language,
+and MFA self-service, sets every provider's binding rule to `[]` so an unlinked
+Feishu login is refused rather than attached to an existing account by email,
+phone, or username, and disables Face ID, WebAuthn, verification-code sign-in,
+and sign-up. Rerun it after any organization or application edit in the Casdoor
+UI, which can reset the binding rule to null.
+
 Prepare the sync worker's JSON configuration and secret files according to its
 schema. Its `/state` volume is `.runtime/sync/state`, and its `/run/secrets` mount
-is `.runtime/secrets`. Review a dry-run report before starting continuous writes.
+is `.runtime/secrets`. Run `--permissions` first: it lists the missing Feishu
+scopes per feature and a `grant_url` to request them. Choose `lifecycle_mode:
+"staged"` to import users while the status scope is pending (admission, roles,
+and offboarding stay skipped until it is granted, then start automatically) or
+`strict` to refuse such runs. Add the `headscale` section so that blocking an
+account also expires the employee's nodes and preauth keys. Review a dry-run
+report before starting continuous writes.
 Do not run Casdoor's native Lark syncer concurrently against the same population
 unless the identity contract explicitly assigns field ownership to both writers.
 
@@ -108,7 +131,9 @@ Start the proxy only after bootstrap hardening, then Headscale:
 
 Store the generated Headscale API key in `.runtime/secrets/headscale_api_key` with
 mode 600 and start Headplane. Its OIDC secret and cookie secret are already mounted
-from private files. Restrict Headplane's public route until the designated first
+from private files. The worker's optional `headscale` section reads the same API
+key file; after a rotation replace the file and restart both Headplane and the
+worker. Restrict Headplane's public route until the designated first
 owner completes OIDC login, because first-user owner bootstrap is an administrative
 event. The default OIDC role is `member`; elevated roles must be explicit and
 reviewed.
@@ -140,34 +165,70 @@ Monitor service health, OAuth failures, successful full-sync age, partial-scope
 errors, missing membership reports, database size, backup age, and TLS renewal.
 Alert if no complete sync succeeds within two expected polling intervals; retain
 the previous membership state while investigating partial API or permission
-failures. A broker outage blocks new logins; existing node access needs separate
-network lifecycle handling.
+failures. The worker writes `sync-state.json.heartbeat.json` in `.runtime/sync/state`
+after every successful applied interval, and its Compose healthcheck reports
+unhealthy when no success occurred within three intervals. A staged run
+(`lifecycle: skipped`) counts as a success there, so alert on `lifecycle`
+separately while admission must be live. A broker outage blocks new logins;
+existing node access is revoked by the worker only for blocked accounts and only
+when `headscale` is configured, and otherwise needs separate network lifecycle
+handling.
 
-For employee departure, a lost device, or compromised credentials:
+For employee departure, a lost device, or compromised credentials, the worker
+covers the common path when its `headscale` section is configured: a full applied
+run that blocks a Casdoor account (inactive Feishu status, or a user confirmed
+missing for `missing_confirmations` runs) also expires, or deletes per
+`on_block`, every Headscale node registered by that OIDC subject and expires the
+subject's preauth keys; the report shows the counts under `revocation`. If
+Headscale is unreachable, the block stays applied, the subject is kept in the
+state file's `pending_revocations`, the run ends with an error, and the
+revocation is retried every interval, including staged runs, until it succeeds.
+Do not clear that state by hand.
+
+For immediate containment, before the directory change reaches the worker:
+
+```sh
+"${dc[@]}" run --rm worker --config /config/sync.json --offboard employees/EMPLOYEE_NAME
+"${dc[@]}" run --rm worker --config /config/sync.json --offboard employees/EMPLOYEE_NAME --apply
+```
+
+The dry run lists the Casdoor changes. `--apply` blocks the account, sets
+`properties.feishu_sync_hold: "true"` so no later run re-enables it, sets
+`headplane_role` to `member`, removes the admission alias and `feishu-*` groups
+while keeping local groups, and, when `headscale` is configured, expires the
+employee's nodes and preauth keys at once. Clear the hold only after the review
+that would justify re-enabling.
+
+Then complete and verify manually; these steps are also the full procedure when
+`headscale` is not configured:
 
 1. Remove approved application access or disable the employee in the authoritative
-   Feishu scope. Apply and verify synchronization into Casdoor. For urgent action,
-   block the Casdoor account and remove admission-group membership immediately;
-   ensure the sync worker cannot undo a temporary administrative block before the
-   authoritative directory change is in place.
-2. Locate every Headscale node and preauth key belonging to that employee. Expire
-   the nodes immediately, revoke any preauth keys, and remove approved subnet/exit
-   routes for compromised routers. Delete compromised nodes when retaining their
-   record is no longer necessary. Authentication disablement alone does not revoke
-   enrolled devices or already-issued preauth keys.
-3. Revoke Casdoor sessions/tokens through its supported administration controls and
-   remove the user's Headplane role. The generated Headplane cookie maximum age is
-   300 seconds; existing Headplane sessions can remain valid until expiration.
-   For immediate administrative containment, stop Headplane or block its proxy
-   route while revocation propagates. Do not promise instant session revocation
-   from a directory update.
+   Feishu scope so the next full run confirms the block. The hold marker set by
+   `--offboard` prevents the worker from undoing the block before the directory
+   change is in place; the worker also preserves an administrative block that
+   carries no worker marker.
+2. List every Headscale node and preauth key belonging to that employee and
+   confirm they are expired or deleted. Without `headscale`, expire the nodes
+   now and revoke any preauth keys. In both cases remove approved subnet/exit
+   routes for compromised routers; the worker never edits routes. Delete
+   compromised nodes when retaining their record is no longer necessary.
+   Authentication disablement alone does not revoke enrolled devices or
+   already-issued preauth keys.
+3. Revoke Casdoor sessions/tokens through its supported administration controls.
+   The generated Headplane cookie maximum age is 300 seconds; the worker does not
+   revoke Headplane sessions, so existing sessions can remain valid until
+   expiration. For immediate administrative containment, stop Headplane or block
+   its proxy route while revocation propagates. Do not promise instant session
+   revocation from a directory update.
 4. If the employee could access service credentials, rotate those credentials and
    expire affected Headscale API keys. API keys are service credentials, not
-   ordinary employee OAuth sessions. Keep the replacement Headplane key private,
-   update its mounted file, and restart Headplane. Verify both a fresh login and
-   existing device access are denied for the former employee.
+   ordinary employee OAuth sessions. Keep the replacement key private, update its
+   mounted file, and restart Headplane and the worker, which share it. Verify
+   both a fresh login and existing device access are denied for the former
+   employee.
 
-The pinned Headscale CLI supports these commands. Replace every example ID with
+The pinned Headscale CLI supports these commands for verification and for manual
+revocation. Replace every example ID with
 the verified result of the corresponding list command; list output can contain
 credential material and must not be pasted into public tickets:
 
@@ -194,7 +255,8 @@ bash scripts/backup.sh .runtime /srv/tailnet-backups/tailnet-2026-09-14.tar.gz
 
 The helper refuses an existing output file and stops worker, Headplane, Headscale,
 Casdoor, and proxy while retaining PostgreSQL for `pg_dump`. It captures the entire
-runtime directory except the Headscale Unix socket, a PostgreSQL custom-format
+runtime directory, including Casdoor's `casdoor/files` uploads and the worker
+state, except the Headscale Unix socket, a PostgreSQL custom-format
 dump, Caddy data/configuration volumes, the release lock, and the deployed proxy/
 Compose configuration. It restarts only services that were originally running,
 including after a failed backup attempt. Inspect restart failures immediately.
@@ -245,5 +307,8 @@ binary against a newer migrated database.
 
 Complete [the acceptance checklist](acceptance-checklist.md), record evidence in
 the release manifest, and run the promotion checker before moving a candidate to
-the production branch. A ten-user pilot should cover the actual operating systems,
+the production branch. Run `scripts/verify-casdoor-authz.py --config
+.runtime/casdoor-host.json` against the candidate Casdoor image; it must exit 0,
+proving that an ordinary employee session cannot change properties, groups,
+`isAdmin`, `isForbidden`, or email. A ten-user pilot should cover the actual operating systems,
 departments, and network environments before onboarding the full team.

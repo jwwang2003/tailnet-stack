@@ -24,6 +24,7 @@ services:
     volumes:
       - ${RUNTIME_DIR}/casdoor/app.conf:/conf/app.conf:ro
       - ${RUNTIME_DIR}/casdoor/logs:/logs
+      - ${RUNTIME_DIR}/casdoor/files:/files
     security_opt: [no-new-privileges:true]
   headscale:
     image: ${HEADSCALE_IMAGE:?Set HEADSCALE_IMAGE}
@@ -76,7 +77,7 @@ services:
       - caddy_data:/data
       - caddy_config:/config
   worker:
-    image: ${WORKER_IMAGE:-tailnet/sync:2026.09-rc.1}
+    image: ${WORKER_IMAGE:-tailnet/sync:2026.09-rc.2}
     profiles: [sync]
     restart: unless-stopped
     user: "${RUN_UID}:${RUN_GID}"
@@ -85,6 +86,13 @@ services:
       - ${RUNTIME_DIR}/sync:/config:ro
       - ${RUNTIME_DIR}/sync/state:/state
       - ${RUNTIME_DIR}/secrets:/run/secrets:ro
+    healthcheck:
+      # The worker writes its last report timestamp; alert when no interval succeeded recently.
+      test: [CMD, python3, -c, "import json,sys,time; c=json.load(open('/config/sync.json')); h=json.load(open(c['state_file']+'.heartbeat.json')); sys.exit(0 if time.time()-h['completed_at'] < 3*c['interval_seconds'] else 1)"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 120s
     security_opt: [no-new-privileges:true]
 secrets:
   db_password:

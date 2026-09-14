@@ -35,7 +35,7 @@ def render(site, output):
         raise ValueError('Runtime directory must not contain whitespace, dollar signs, or #')
     output.mkdir(parents=True, exist_ok=True, mode=0o700)
     output.chmod(0o700)
-    for directory in ('casdoor/logs', 'headscale/data', 'headplane/data', 'sync/state', 'secrets'):
+    for directory in ('casdoor/logs', 'casdoor/files', 'headscale/data', 'headplane/data', 'sync/state', 'secrets'):
         (output / directory).mkdir(parents=True, exist_ok=True, mode=0o700)
     for name in ('db_password', 'headscale_oidc_secret', 'headplane_oidc_secret', 'cookie_secret'):
         path = output / 'secrets' / name
@@ -94,8 +94,8 @@ frontendBaseDir = "./web/build"
     env = {
         'COMPOSE_PROJECT_NAME': 'integrated-tailnet', 'RUNTIME_DIR': str(output), 'RUN_UID': str(os.getuid()), 'RUN_GID': str(os.getgid()),
         'CASDOOR_HOST': site['casdoor_host'], 'HEADSCALE_HOST': site['headscale_host'], 'HEADPLANE_HOST': site['headplane_host'],
-        'HEADSCALE_IMAGE': 'tailnet/headscale:2026.09-rc.1', 'HEADPLANE_IMAGE': 'tailnet/headplane:2026.09-rc.1',
-        'CASDOOR_IMAGE': 'tailnet/casdoor:2026.09-rc.1', 'POSTGRES_IMAGE': inputs['images']['database'],
+        'HEADSCALE_IMAGE': 'tailnet/headscale:2026.09-rc.2', 'HEADPLANE_IMAGE': 'tailnet/headplane:2026.09-rc.2',
+        'CASDOOR_IMAGE': 'tailnet/casdoor:2026.09-rc.2', 'POSTGRES_IMAGE': inputs['images']['database'],
         'CADDY_IMAGE': inputs['images']['reverse_proxy'], 'WORKER_IMAGE': inputs['images']['sync'],
         'HEADPLANE_ORGANIZATION_NAME': '', 'HEADPLANE_ORGANIZATION_LOGO_URL': '',
         'HEADPLANE_ORGANIZATION_NAME_EN': '', 'HEADPLANE_ORGANIZATION_NAME_ZH': ''

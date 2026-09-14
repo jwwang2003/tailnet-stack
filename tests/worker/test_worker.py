@@ -42,6 +42,15 @@ class FixtureApi:
         self.native_columns = [{"name": "Lark", "casdoorName": "Lark", "isKey": True, "isHashed": False}, {"name": "DisplayName", "casdoorName": "DisplayName", "isHashed": True}]
         self.native_app_id = "cli_REPLACE_ME"
         self.before_update = None
+        # Feishu application scope status; None simulates a denied status read.
+        self.app_scopes = ["contact:contact.base:readonly", "contact:user.base:readonly", "contact:department.base:readonly",
+                           "contact:user.department:readonly", "contact:user.employee:readonly", "contact:user.email:readonly",
+                           "contact:user.phone:readonly", "contact:user.employee_number:read", "contact:group:readonly"]
+        # Headscale fixture: users keyed by provider identifier, nodes and preauth keys.
+        self.headscale_users = []
+        self.headscale_nodes = []
+        self.headscale_keys = []
+        self.headscale_calls = []
 
     def page(self, key, items, more=False, cursor=""):
         return {"code": 0, "data": {key: copy.deepcopy(items), "has_more": more, "page_token": cursor}}
@@ -51,6 +60,12 @@ class FixtureApi:
         self.calls.append((method, path, copy.deepcopy(query)))
         if self.fail_path and self.fail_path in path:
             raise w.SyncError("fixture permission failure")
+        if path == "/open-apis/application/v6/scopes":
+            if self.app_scopes is None:
+                return {"code": 99991672, "msg": "no permission"}
+            return {"code": 0, "data": {"scopes": [{"scope_name": name, "grant_status": 1, "scope_type": "tenant"} for name in self.app_scopes]}}
+        if path.startswith("/api/v1/"):
+            return self.headscale(method, path, query, body, headers)
         if path.endswith("tenant_access_token/internal"):
             return {"code": 0, "tenant_access_token": "synthetic-token"}
         if path.endswith("/scopes"):
@@ -87,8 +102,9 @@ class FixtureApi:
         elif action == "get-groups":
             result = copy.deepcopy(self.groups)
         elif action == "get-user":
-            result = next(user for user in self.users if user["owner"] + "/" + user["name"] == query["id"])
-            if self.before_update:
+            # Casdoor answers a missing user with status ok and a null payload.
+            result = next((user for user in self.users if user["owner"] + "/" + user["name"] == query["id"]), None)
+            if result is not None and self.before_update:
                 self.before_update(result)
         elif action == "run-syncer":
             self.writes.append(action)
@@ -123,6 +139,33 @@ class FixtureApi:
         return {"status": "ok", "data": result}
 
 
+    def headscale(self, method, path, query, body, headers):
+        assert headers.get("Authorization") == "Bearer synthetic-headscale-key"
+        self.headscale_calls.append((method, path, copy.deepcopy(query), copy.deepcopy(body)))
+        if path == "/api/v1/user" and method == "GET":
+            return {"users": copy.deepcopy(self.headscale_users)}
+        if path == "/api/v1/node" and method == "GET":
+            assert not query, "node listing must not filter by user name"
+            return {"nodes": copy.deepcopy(self.headscale_nodes)}
+        if path.startswith("/api/v1/node/") and path.endswith("/expire") and method == "POST":
+            node = next(item for item in self.headscale_nodes if item["id"] == path.split("/")[-2])
+            node["expired"] = True
+            self.writes.append("expire-node")
+            return {"node": copy.deepcopy(node)}
+        if path.startswith("/api/v1/node/") and method == "DELETE":
+            self.headscale_nodes = [item for item in self.headscale_nodes if item["id"] != path.split("/")[-1]]
+            self.writes.append("delete-node")
+            return {}
+        if path == "/api/v1/preauthkey" and method == "GET":
+            return {"preAuthKeys": copy.deepcopy(self.headscale_keys)}
+        if path == "/api/v1/preauthkey/expire" and method == "POST":
+            key = next(item for item in self.headscale_keys if item["id"] == body["id"])
+            key["expired"] = True
+            self.writes.append("expire-preauthkey")
+            return {}
+        raise AssertionError((method, path, query))
+
+
 class WorkerLifecycleTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -134,6 +177,9 @@ class WorkerLifecycleTests(unittest.TestCase):
             path = self.directory / section
             path.write_text("synthetic-test-secret")
             self.config[section][filename] = str(path)
+        key = self.directory / "headscale_api_key"
+        key.write_text("synthetic-headscale-key\n")
+        self.config["headscale"]["api_key_file"] = str(key)
         self.config["feishu"]["group_ids"] = ["g_admin", "g_tailnet"]
         self.config["allow_group_id"] = "g_tailnet"
         self.config["headplane_role_groups"] = {"g_admin": "network_admin"}

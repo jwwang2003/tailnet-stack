@@ -33,11 +33,33 @@ HOLD_MARKER = "feishu_sync_hold"
 OWNER_MARKER = "feishu_sync_owner"
 WORKER_OWNER = "tailscale-feishu-integration/v1"
 ROLE_PRIORITY = ("admin", "network_admin", "it_admin", "auditor", "viewer", "member")
+LIFECYCLE_MODES = ("strict", "staged")
+# Feishu Contact field permissions (any one scope per feature suffices). Names
+# follow the Contact v3 "获取单个用户信息" field permission table.
+BROAD_CONTACT_SCOPES = ("contact:contact:readonly_as_app", "contact:contact:readonly", "contact:contact:access_as_app")
+FEATURE_SCOPES = {
+    "directory_read": ("contact:contact.base:readonly", *BROAD_CONTACT_SCOPES),
+    "department_tree": ("contact:department.base:readonly", *BROAD_CONTACT_SCOPES),
+    "user_base": ("contact:user.base:readonly", *BROAD_CONTACT_SCOPES),
+    "user_department": ("contact:user.department:readonly", *BROAD_CONTACT_SCOPES),
+    "status": ("contact:user.employee:readonly", *BROAD_CONTACT_SCOPES),
+    "job_title": ("contact:user.employee:readonly", *BROAD_CONTACT_SCOPES),
+    "employee_no": ("contact:user.employee_number:read", "contact:user.employee:readonly", *BROAD_CONTACT_SCOPES),
+    "email": ("contact:user.email:readonly",),
+    "mobile": ("contact:user.phone:readonly",),
+    "tenant_name": ("tenant:tenant:readonly",),
+    "contact_groups": ("contact:group:readonly", *BROAD_CONTACT_SCOPES),
+    "job_level": ("contact:job_level:readonly", "contact:job_level", "contact:contact:readonly_as_app"),
+    "job_family": ("contact:job_family:readonly", "contact:job_family", "contact:contact:readonly_as_app"),
+}
+LIFECYCLE_FEATURES = ("directory_read", "department_tree", "user_base", "user_department", "status")
+DESCRIPTIVE_FEATURES = ("employee_no", "job_title", "email", "mobile")
 
 # Support both direct CLI execution and import-based test/automation callers.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from employee_profile import (ProfileError, normalize_profile, merge_profiles,
                               profile_property_delta, profile_coverage)
+from tailnet import Tailnet, TailnetError, validate_headscale_config, revoke_subjects
 
 
 def digest(value):
@@ -112,6 +134,12 @@ def load_config(path):
                 raise SyncError(f"invalid {field}")
         if type(config.setdefault("allow_reenable", False)) is not bool:
             raise SyncError("allow_reenable must be boolean")
+        if config.setdefault("lifecycle_mode", "strict") not in LIFECYCLE_MODES:
+            raise SyncError("lifecycle_mode must be strict or staged")
+        try:
+            config["headscale"] = validate_headscale_config(config.get("headscale"))
+        except TailnetError as error:
+            raise SyncError(str(error)) from None
         for field in (fs["app_secret_file"], cs["client_secret_file"], config["state_file"]):
             if not isinstance(field, str) or not field:
                 raise SyncError("file paths must be nonempty")
@@ -156,9 +184,11 @@ class Http:
                 retry_after = error.headers.get("Retry-After", "") if error.headers else ""
                 delay = min(int(retry_after), 30) if retry_after.isdigit() else min(2 ** attempt, 8)
                 self.sleep(delay)
-            except (URLError, TimeoutError, ConnectionError, OSError):
+            except (URLError, TimeoutError, ConnectionError, OSError) as error:
                 if attempt == attempts - 1:
-                    raise SyncError(f"API transport failure on {path}") from None
+                    # The OS-level reason (DNS, refused, timeout) carries no credentials.
+                    reason = getattr(error, "reason", None) or error
+                    raise SyncError(f"API transport failure on {path}: {type(reason).__name__}: {str(reason)[:120]}") from None
                 self.sleep(min(2 ** attempt, 8))
             except (ValueError, UnicodeDecodeError):
                 raise SyncError(f"invalid API JSON on {path}") from None
@@ -222,6 +252,56 @@ class Feishu:
                     raise SyncError("malformed Contact permission scope")
                 result[key].update(identifier(value) for value in values)
         return {key: sorted(values) for key, values in result.items()}
+
+    def required_features(self, config):
+        """Features the configuration relies on, in reporting order."""
+        features = list(LIFECYCLE_FEATURES)
+        if config["feishu"]["group_ids"]:
+            features.append("contact_groups")
+        if config["feishu"].get("expected_tenant_name"):
+            features.append("tenant_name")
+        profile = config.get("employee_profile", {})
+        if profile.get("enabled"):
+            features.extend(DESCRIPTIVE_FEATURES)
+            if profile.get("catalog_lookup"):
+                features.extend(("job_level", "job_family"))
+        return features
+
+    def grant_url(self, scopes):
+        # Same link shape Feishu returns in its 99991672 permission errors.
+        return self.config["base_url"] + "/app/" + quote(self.config["app_id"], safe="") + "/auth?q=" + quote(",".join(scopes), safe=",:_.") + "&op_from=openapi&token_type=tenant"
+
+    def permissions(self, config):
+        """Report granted/missing app scopes per feature; never raises on a denied status read."""
+        features = self.required_features(config)
+        result = self.http.request("GET", self.config["base_url"], "/open-apis/application/v6/scopes", headers={"Authorization": "Bearer " + self.token})
+        report = {"checked": False, "granted": [], "missing": {}, "missing_scopes": [], "grant_url": None}
+        scopes = result.get("data", {}).get("scopes") if result.get("code") == 0 else None
+        if not isinstance(scopes, list):
+            report["reason"] = f"scope status unavailable; code={result.get('code')!r}"
+            return report
+        granted = set()
+        for scope in scopes:
+            if not isinstance(scope, dict) or not isinstance(scope.get("scope_name"), str):
+                raise SyncError("malformed application scope status")
+            if scope.get("grant_status") == 1:
+                granted.add(scope["scope_name"])
+        report["checked"] = True
+        report["granted"] = sorted(granted)
+        for feature in features:
+            options = FEATURE_SCOPES[feature]
+            if not granted.intersection(options):
+                report["missing"][feature] = list(options)
+        # Request the first (narrowest) option of each missing feature, once.
+        requested = []
+        for options in report["missing"].values():
+            if options[0] not in requested:
+                requested.append(options[0])
+        report["missing_scopes"] = requested
+        report["lifecycle_ready"] = not any(feature in report["missing"] for feature in LIFECYCLE_FEATURES + ("contact_groups", "tenant_name"))
+        if requested:
+            report["grant_url"] = self.grant_url(requested)
+        return report
 
     def tenant(self):
         result = self.http.request("GET", self.config["base_url"], "/open-apis/tenant/v2/tenant/query",
@@ -614,6 +694,11 @@ def save_state(path, state):
             os.unlink(temporary)
 
 
+def write_heartbeat(config, report):
+    """Record the last successful interval for container health checks (any mode)."""
+    save_state(config["state_file"] + ".heartbeat.json", {"completed_at": int(time.time()), "mode": report.get("mode"), "lifecycle": report.get("lifecycle", "synchronized")})
+
+
 def load_employee_catalogs(feishu, snapshot, config):
     if config.get("employee_profile", {}).get("enabled") and config["employee_profile"].get("catalog_lookup"):
         for catalog in ("job_levels", "job_families"):
@@ -628,18 +713,8 @@ def load_employee_catalogs(feishu, snapshot, config):
             snapshot[catalog] = names
 
 
-def profile_only(config, apply=False, http=None):
-    """Update descriptive properties only; no native imports or access/lifecycle writes."""
-    if not config.get("employee_profile", {}).get("enabled"):
-        raise SyncError("Enable employee_profile before profile-only synchronization")
-    http = http or Http(config["http_timeout_seconds"], config["http_attempts"])
-    feishu = Feishu(config["feishu"], http)
-    snapshot = feishu.snapshot(audit=True)
-    load_employee_catalogs(feishu, snapshot, config)
-    # Keep the same source/scope boundary without advancing lifecycle counters.
-    check_state(config, snapshot, load_state(config["state_file"]))
-    casdoor = Casdoor(config["casdoor"], http)
-    users, _ = casdoor.snapshot()
+def profile_operations(config, snapshot, users):
+    """Plan descriptive property updates for linked users; never groups/roles/status."""
     operations, seen = [], set()
     for user in users:
         if user.get("owner") != config["casdoor"]["organization"]:
@@ -669,39 +744,40 @@ def profile_only(config, apply=False, http=None):
             delta["feishu_tenant_name"] = snapshot["tenant_name"]
         if delta:
             operations.append((user, delta))
+    return operations, len(set(snapshot["users"]) & seen)
+
+
+def apply_profile_operations(casdoor, operations):
+    for user, delta in operations:
+        user_id = user["owner"] + "/" + user["name"]
+        latest = casdoor.call("get-user", {"id": user_id})
+        if not isinstance(latest, dict) or latest.get("id") != user["id"] or latest.get("lark") != user["lark"] or mutable_digest(latest) != mutable_digest(user):
+            raise SyncError("Casdoor identity or owned properties changed during profile update")
+        casdoor.call("update-user", {"id": user_id, "columns": "properties"}, {"properties": delta}, mutate=True)
+
+
+def profile_only(config, apply=False, http=None):
+    """Update descriptive properties only; no native imports or access/lifecycle writes."""
+    if not config.get("employee_profile", {}).get("enabled"):
+        raise SyncError("Enable employee_profile before profile-only synchronization")
+    http = http or Http(config["http_timeout_seconds"], config["http_attempts"])
+    feishu = Feishu(config["feishu"], http)
+    snapshot = feishu.snapshot(audit=True)
+    load_employee_catalogs(feishu, snapshot, config)
+    # Keep the same source/scope boundary without advancing lifecycle counters.
+    check_state(config, snapshot, load_state(config["state_file"]))
+    casdoor = Casdoor(config["casdoor"], http)
+    users, _ = casdoor.snapshot()
+    operations, matched = profile_operations(config, snapshot, users)
     if apply:
-        for user, delta in operations:
-            user_id = user["owner"] + "/" + user["name"]
-            latest = casdoor.call("get-user", {"id": user_id})
-            if not isinstance(latest, dict) or latest.get("id") != user["id"] or latest.get("lark") != user["lark"] or mutable_digest(latest) != mutable_digest(user):
-                raise SyncError("Casdoor identity or owned properties changed during profile update")
-            casdoor.call("update-user", {"id": user_id, "columns": "properties"}, {"properties": delta}, mutate=True)
+        apply_profile_operations(casdoor, operations)
     return {"status": "ok", "mode": "profile-only-apply" if apply else "profile-only-dry-run",
-            "source_users": len(snapshot["users"]), "matched_users": len(set(snapshot["users"]) & seen),
+            "source_users": len(snapshot["users"]), "matched_users": matched,
             "updates": len(operations), "profile_coverage": profile_coverage([user["profile"] for user in snapshot["users"].values()])}
 
 
-def audit_directory(config, http=None):
-    snapshot = Feishu(config["feishu"], http or Http(config["http_timeout_seconds"], config["http_attempts"])).snapshot(audit=True)
-    return {"status": "ok", "mode": "audit", "source_users": len(snapshot["users"]),
-            "departments": len(snapshot["departments"]) - int("0" in snapshot["departments"]),
-            "direct_memberships": sum(len(user["department_ids"]) for user in snapshot["users"].values()),
-            "tenant_name": snapshot.get("tenant_name"), "tenant_verified": bool(snapshot.get("tenant_name")),
-            "users_with_complete_status": sum(user["status"] is not None for user in snapshot["users"].values()),
-            "profile_coverage": profile_coverage([user["profile"] for user in snapshot["users"].values()])}
-
-
-def run(config, apply=False, http=None):
-    http = http or Http(config["http_timeout_seconds"], config["http_attempts"])
-    state = load_state(config["state_file"])
-    feishu = Feishu(config["feishu"], http)
-    snapshot = feishu.snapshot()
-    load_employee_catalogs(feishu, snapshot, config)
-    check_state(config, snapshot, state)
-    casdoor = Casdoor(config["casdoor"], http)
-    native_columns = casdoor.verify_native(config["feishu"])
-    users, groups = casdoor.snapshot()
-    # Guard native columns even when descriptive enrichment is disabled.
+def guard_native_columns(native_columns, users, snapshot):
+    """Refuse native imports that would erase populated profile data because a source field is unreadable."""
     guards = {"Phone": ("phone", ("mobile",)), "Title": ("title", ("job_title",)), "Email": ("email", ("email", "enterprise_email"))}
     for user in users:
         source = snapshot["users"].get(user.get("lark"))
@@ -714,6 +790,92 @@ def run(config, apply=False, http=None):
             known_result = any(profile.get(field) for field in fields) or all(field in profile for field in fields)
             if column in native_columns and user.get(target) and not known_result:
                 raise SyncError("Native " + column + " source field is unavailable; refusing to erase existing profile data")
+
+
+def status_gap(config, feishu, snapshot):
+    """Describe missing employment status with the scopes an operator must grant."""
+    incomplete = sum(user["status"] is None for user in snapshot["users"].values())
+    if not incomplete:
+        return None
+    permissions = feishu.permissions(config)
+    scopes = permissions["missing"].get("status") or list(FEATURE_SCOPES["status"])
+    return {"users_without_status": incomplete, "missing_scopes": permissions["missing_scopes"] or [scopes[0]],
+            "grant_url": permissions.get("grant_url") or feishu.grant_url([scopes[0]]),
+            "permissions_checked": permissions["checked"]}
+
+
+def staged_run(config, feishu, snapshot, state, gap, apply=False, http=None):
+    """Populate Casdoor users and descriptive profiles while lifecycle status is unavailable.
+
+    No group, role, forbidden-state or missing-counter changes happen here; the
+    next run upgrades itself to full lifecycle synchronization automatically
+    once every source user carries a complete status object.
+    """
+    load_employee_catalogs(feishu, snapshot, config)
+    check_state(config, snapshot, state)
+    casdoor = Casdoor(config["casdoor"], http)
+    native_columns = casdoor.verify_native(config["feishu"])
+    users, _ = casdoor.snapshot()
+    guard_native_columns(native_columns, users, snapshot)
+    if apply:
+        casdoor.import_profiles()
+        users, _ = casdoor.snapshot()
+    operations, matched = ([], len({user.get("lark") for user in users} & set(snapshot["users"])))
+    if config.get("employee_profile", {}).get("enabled"):
+        operations, matched = profile_operations(config, snapshot, users)
+    revocation = {"configured": bool(config.get("headscale")), "pending": len(state.get("pending_revocations", []))}
+    if apply:
+        apply_profile_operations(casdoor, operations)
+        if state and state.get("pending_revocations") and config.get("headscale"):
+            retried, pending = revoke_subjects(Tailnet(config["headscale"], http), state["pending_revocations"], (SyncError, TailnetError))
+            revocation.update(retried, pending=len(pending))
+            save_state(config["state_file"], {**state, "pending_revocations": pending})
+    return {"status": "ok", "mode": "apply-staged" if apply else "dry-run-staged", "lifecycle": "skipped",
+            "lifecycle_reason": "user status unavailable; admission, roles and offboarding are not synchronized", **gap,
+            "source_users": len(snapshot["users"]), "unlinked_source_users": len(set(snapshot["users"]) - {user.get("lark") for user in users}),
+            "matched_users": matched, "native_import": apply, "profile_updates": len(operations), "revocation": revocation,
+            "profile_coverage": profile_coverage([user["profile"] for user in snapshot["users"].values()]), "completed_at": int(time.time())}
+
+
+def check_permissions(config, http=None):
+    """One-shot scope report without reading the directory."""
+    feishu = Feishu(config["feishu"], http or Http(config["http_timeout_seconds"], config["http_attempts"]))
+    feishu.authenticate()
+    return {"status": "ok", "mode": "permissions", "lifecycle_mode": config["lifecycle_mode"], "permissions": feishu.permissions(config)}
+
+
+def audit_directory(config, http=None):
+    feishu = Feishu(config["feishu"], http or Http(config["http_timeout_seconds"], config["http_attempts"]))
+    snapshot = feishu.snapshot(audit=True)
+    return {"status": "ok", "mode": "audit", "source_users": len(snapshot["users"]), "permissions": feishu.permissions(config),
+            "departments": len(snapshot["departments"]) - int("0" in snapshot["departments"]),
+            "direct_memberships": sum(len(user["department_ids"]) for user in snapshot["users"].values()),
+            "tenant_name": snapshot.get("tenant_name"), "tenant_verified": bool(snapshot.get("tenant_name")),
+            "users_with_complete_status": sum(user["status"] is not None for user in snapshot["users"].values()),
+            "profile_coverage": profile_coverage([user["profile"] for user in snapshot["users"].values()])}
+
+
+def run(config, apply=False, http=None):
+    http = http or Http(config["http_timeout_seconds"], config["http_attempts"])
+    state = load_state(config["state_file"])
+    feishu = Feishu(config["feishu"], http)
+    # Read the complete directory first; decide afterwards whether lifecycle
+    # synchronization is permitted by the observed status coverage.
+    snapshot = feishu.snapshot(audit=True)
+    gap = status_gap(config, feishu, snapshot)
+    if gap:
+        if config["lifecycle_mode"] != "staged":
+            raise SyncError("user status is incomplete for %d users; grant %s (%s) or set lifecycle_mode to staged"
+                            % (gap["users_without_status"], ", ".join(gap["missing_scopes"]), gap["grant_url"]))
+        return staged_run(config, feishu, snapshot, state, gap, apply, http)
+    snapshot["audit_only"] = False
+    load_employee_catalogs(feishu, snapshot, config)
+    check_state(config, snapshot, state)
+    casdoor = Casdoor(config["casdoor"], http)
+    native_columns = casdoor.verify_native(config["feishu"])
+    users, groups = casdoor.snapshot()
+    # Guard native columns even when descriptive enrichment is disabled.
+    guard_native_columns(native_columns, users, snapshot)
     # Reject known target collisions, changed identities and oversized claims before
     # native import (which itself mutates profiles).
     plan(config, snapshot, users, groups, state)
@@ -721,7 +883,9 @@ def run(config, apply=False, http=None):
         casdoor.import_profiles()
         users, groups = casdoor.snapshot()
     operations, next_state, report = plan(config, snapshot, users, groups, state)
+    revocation = {"configured": bool(config.get("headscale")), "subjects": 0, "pending": 0}
     if apply:
+        blocked_subjects = list(state.get("pending_revocations", []))
         for operation in operations:
             query = {"id": operation["id"]}
             if operation["action"] == "update-user":
@@ -733,8 +897,55 @@ def run(config, apply=False, http=None):
                     raise SyncError("Casdoor groups/status/properties changed during apply; retry a fresh plan")
                 query["columns"] = ",".join(operation["body"])
             casdoor.call(operation["action"], query, operation["body"], mutate=True)
+            if operation["action"] == "update-user" and operation["body"].get("isForbidden") is True and operation["expected_id"] not in blocked_subjects:
+                blocked_subjects.append(operation["expected_id"])
+        pending = blocked_subjects
+        if blocked_subjects and config.get("headscale"):
+            # Casdoor blocks are applied; revoke the subjects' enrolled devices and keys.
+            revoked, pending = revoke_subjects(Tailnet(config["headscale"], http), blocked_subjects, (SyncError, TailnetError))
+            revocation.update(revoked)
+        revocation.update(subjects=len(blocked_subjects), pending=len(pending))
+        next_state["pending_revocations"] = pending if config.get("headscale") else []
         save_state(config["state_file"], next_state)
-    return {"status": "ok", "mode": "apply" if apply else "dry-run", "completed_at": int(time.time()), **report}
+        if pending and config.get("headscale"):
+            raise SyncError("Casdoor blocks were applied but Headscale revocation is pending for %d subject(s); it is retried on the next run" % len(pending))
+    return {"status": "ok", "mode": "apply" if apply else "dry-run", "completed_at": int(time.time()), "revocation": revocation, **report}
+
+
+def offboard(config, target, apply=False, http=None):
+    """Immediate containment: block a Casdoor account, drop managed access and revoke Headscale access."""
+    http = http or Http(config["http_timeout_seconds"], config["http_attempts"])
+    organization = config["casdoor"]["organization"]
+    owner, _, name = target.partition("/")
+    if owner != organization or not name or "/" in name:
+        raise SyncError("offboard target must be organization/name inside the configured organization")
+    casdoor = Casdoor(config["casdoor"], http)
+    user = casdoor.call("get-user", {"id": target})
+    if not isinstance(user, dict) or user.get("owner") != organization or user.get("name") != name:
+        raise SyncError("Casdoor user was not found in the configured organization")
+    subject = identifier(user.get("id"), "Casdoor subject")
+    admission = organization + "/" + config["admission_group"]
+    def managed(group):
+        return group == admission or any(group.startswith(organization + "/" + prefix) for prefix in PREFIXES)
+    current_groups = user.get("groups") or []
+    if not isinstance(current_groups, list) or any(not isinstance(item, str) for item in current_groups):
+        raise SyncError("Casdoor user groups are malformed")
+    updates = {"properties": {HOLD_MARKER: "true", "headplane_role": "member"}}
+    if user.get("isForbidden") is not True:
+        updates["isForbidden"] = True
+    retained = sorted(item for item in current_groups if not managed(item))
+    if retained != sorted(set(current_groups)):
+        updates["groups"] = retained
+    report = {"status": "ok", "mode": "offboard-apply" if apply else "offboard-dry-run", "target": target,
+              "casdoor_updates": sorted(updates), "revocation": {"configured": bool(config.get("headscale"))}}
+    if apply:
+        casdoor.call("update-user", {"id": target, "columns": ",".join(updates)}, updates, mutate=True)
+        if config.get("headscale"):
+            try:
+                report["revocation"].update(Tailnet(config["headscale"], http).revoke(subject))
+            except TailnetError as error:
+                raise SyncError(str(error)) from None
+    return report
 
 
 def main(argv=None):
@@ -743,17 +954,24 @@ def main(argv=None):
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--apply", action="store_true", help="write to Casdoor and durable state")
     mode.add_argument("--audit", action="store_true", help="read directory field coverage only; no writes, even if status is unavailable")
+    mode.add_argument("--permissions", action="store_true", help="report granted and missing Feishu app scopes; no directory read, no writes")
     parser.add_argument("--profile-only", action="store_true", help="update descriptive employee properties only; never groups/roles/status/native imports")
+    parser.add_argument("--offboard", metavar="ORG/NAME", help="block one Casdoor account now and revoke its Headscale nodes/keys (dry run unless --apply)")
     parser.add_argument("--watch", action="store_true", help="repeat until stopped; failures retry on the next interval")
     args = parser.parse_args(argv)
     try:
         config = load_config(args.config)
-        if args.audit:
-            if args.profile_only:
-                raise SyncError("Choose audit or profile-only mode")
+        if args.audit or args.permissions:
+            if args.profile_only or args.offboard:
+                raise SyncError("Choose audit, permissions, profile-only or offboard mode")
             if args.watch:
-                raise SyncError("Audit is one-shot; do not combine --audit and --watch")
-            print(json.dumps(audit_directory(config), ensure_ascii=False, sort_keys=True))
+                raise SyncError("Audit and permissions checks are one-shot; do not combine them with --watch")
+            print(json.dumps(check_permissions(config) if args.permissions else audit_directory(config), ensure_ascii=False, sort_keys=True))
+            return 0
+        if args.offboard:
+            if args.profile_only or args.watch:
+                raise SyncError("Offboarding is one-shot; do not combine --offboard with --profile-only or --watch")
+            print(json.dumps(offboard(config, args.offboard, args.apply), ensure_ascii=False, sort_keys=True))
             return 0
         lock = None
         if args.apply:
@@ -766,7 +984,10 @@ def main(argv=None):
                 raise SyncError("another worker holds the state lock") from None
         while True:
             try:
-                print(json.dumps(profile_only(config, args.apply) if args.profile_only else run(config, args.apply), sort_keys=True), flush=True)
+                report = profile_only(config, args.apply) if args.profile_only else run(config, args.apply)
+                print(json.dumps(report, sort_keys=True), flush=True)
+                if args.apply:
+                    write_heartbeat(config, report)
             except (SyncError, OSError) as error:
                 message = str(error) if isinstance(error, SyncError) else "local state I/O failed"
                 print(json.dumps({"status": "error", "error": message, "completed_at": int(time.time())}), file=sys.stderr, flush=True)
