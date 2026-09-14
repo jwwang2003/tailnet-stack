@@ -14,7 +14,7 @@ components:
     upstream_release_branch: "release-branch/0.29"
     tag: "v0.29.3"
     upstream_commit: "5aff68b5b9921db5ccb88013bb1740077ab872fb"
-    source_commit: "5aff68b5b9921db5ccb88013bb1740077ab872fb"
+    source_commit: "fc99ff8476cfcb816dd52a05d3ae6e7bfbc4fb49"
     image: "feishu/headscale:2026.09-rc.1"
     image_digest: null
   headplane:
