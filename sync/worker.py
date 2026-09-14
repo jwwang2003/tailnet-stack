@@ -34,6 +34,11 @@ OWNER_MARKER = "feishu_sync_owner"
 WORKER_OWNER = "tailscale-feishu-integration/v1"
 ROLE_PRIORITY = ("admin", "network_admin", "it_admin", "auditor", "viewer", "member")
 
+# Support both direct CLI execution and import-based test/automation callers.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from employee_profile import (ProfileError, normalize_profile, merge_profiles,
+                              profile_property_delta, profile_coverage)
+
 
 def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
@@ -76,6 +81,15 @@ def load_config(path):
             raise SyncError("group_ids must be an array (empty for department-only admission)")
         for key in ("root_department_ids", "group_ids"):
             fs[key] = sorted(set(identifier(item) for item in fs[key]))
+        profile = config.setdefault("employee_profile", {})
+        if not isinstance(profile, dict):
+            raise SyncError("employee_profile must be an object")
+        for key in ("enabled", "catalog_lookup"):
+            if type(profile.setdefault(key, False)) is not bool:
+                raise SyncError("employee profile options must be boolean")
+        expected_tenant = fs.get("expected_tenant_name")
+        if expected_tenant is not None and (not isinstance(expected_tenant, str) or not expected_tenant.strip()):
+            raise SyncError("expected_tenant_name must be a nonempty string")
         config.setdefault("allow_group_id", "")
         if config["allow_group_id"] and config["allow_group_id"] not in fs["group_ids"]:
             raise SyncError("allow_group_id must be in feishu.group_ids")
@@ -205,8 +219,23 @@ class Feishu:
                 result[key].update(identifier(value) for value in values)
         return {key: sorted(values) for key, values in result.items()}
 
-    def snapshot(self):
+    def tenant(self):
+        result = self.http.request("GET", self.config["base_url"], "/open-apis/tenant/v2/tenant/query",
+                                   headers={"Authorization": "Bearer " + self.token})
+        if result.get("code") != 0:
+            raise SyncError("Feishu tenant verification failed; check tenant:tenant:readonly")
+        tenant = result.get("data", {}).get("tenant", {})
+        if not isinstance(tenant, dict) or not isinstance(tenant.get("name"), str) or not tenant["name"]:
+            raise SyncError("Feishu tenant response has no company name")
+        return tenant["name"]
+
+    def snapshot(self, audit=False):
         self.authenticate()
+        tenant_name = None
+        if self.config.get("expected_tenant_name"):
+            tenant_name = self.tenant()
+            if tenant_name != self.config["expected_tenant_name"]:
+                raise SyncError("Feishu company name does not match expected_tenant_name")
         scope = self.scope()
         departments, users, memberships = {}, {}, {}
         roots = self.config["root_department_ids"]
@@ -263,12 +292,20 @@ class Feishu:
                 key = identifier(user.get("open_id"), "user open_id")
                 status = user.get("status")
                 required = ("is_activated", "is_frozen", "is_resigned", "is_exited")
-                if not isinstance(status, dict) or any(type(status.get(field)) is not bool for field in required):
+                complete_status = isinstance(status, dict) and all(type(status.get(field)) is bool for field in required)
+                if not complete_status and not audit:
                     raise SyncError("user status is incomplete; verify Contact field permissions")
-                normalized = {field: status[field] for field in required}
+                normalized = {field: status[field] for field in required} if complete_status else None
                 if key in users and users[key]["status"] != normalized:
                     raise SyncError("inconsistent duplicate user status")
-                users[key] = {"open_id": key, "status": normalized}
+                try:
+                    profile = merge_profiles(users.get(key, {}).get("profile", {}), normalize_profile(user))
+                except ProfileError as error:
+                    raise SyncError(str(error)) from None
+                direct = set(users.get(key, {}).get("department_ids", []))
+                if department_id != "0":
+                    direct.add(department_id)
+                users[key] = {"open_id": key, "status": normalized, "profile": profile, "department_ids": sorted(direct)}
                 memberships.setdefault(key, set()).update("feishu-department-" + item for item in ancestors[department_id])
         all_groups = {}
         for group in self.items("group/simplelist", key="grouplist") if self.config["group_ids"] else []:
@@ -311,7 +348,7 @@ class Feishu:
                             user_memberships.add("feishu-group-" + group_id)
         if self.scope() != scope:
             raise SyncError("Contact permission scope changed during this read")
-        return {"scope": scope, "departments": departments, "users": users, "memberships": memberships, "groups": groups, "group_members": group_members, "skipped_group_members": skipped_members}
+        return {"scope": scope, "departments": departments, "users": users, "memberships": memberships, "groups": groups, "group_members": group_members, "skipped_group_members": skipped_members, "audit_only": audit, "tenant_name": tenant_name}
 
 
 class Casdoor:
@@ -356,6 +393,8 @@ class Casdoor:
             if not name or column.get("name") != name:
                 raise SyncError("native syncer tableColumns must use matching Casdoor-cased name and casdoorName")
 
+        return {column["casdoorName"] for column in columns}
+
     def import_profiles(self):
         self.call("run-syncer", {"id": self.config["native_syncer_id"], "organization": self.config["organization"]}, mutate=True)
 
@@ -370,7 +409,11 @@ class Casdoor:
 
 def source_binding(config):
     fs, cs = config["feishu"], config["casdoor"]
-    return digest({"feishu_origin": fs["base_url"], "app_id": fs["app_id"], "tenant_key": fs["tenant_key"], "roots": fs["root_department_ids"], "groups": fs["group_ids"], "casdoor_origin": cs["base_url"], "organization": cs["organization"], "allow_group_id": config["allow_group_id"], "allowed_department_ids": config["allowed_department_ids"], "admission_group": config["admission_group"]})
+    binding = {"feishu_origin": fs["base_url"], "app_id": fs["app_id"], "tenant_key": fs["tenant_key"], "roots": fs["root_department_ids"], "groups": fs["group_ids"], "casdoor_origin": cs["base_url"], "organization": cs["organization"], "allow_group_id": config["allow_group_id"], "allowed_department_ids": config["allowed_department_ids"], "admission_group": config["admission_group"]}
+    # Preserve existing state hashes when company verification is not configured.
+    if fs.get("expected_tenant_name"):
+        binding["expected_tenant_name"] = fs["expected_tenant_name"]
+    return digest(binding)
 
 
 def load_state(path):
@@ -395,6 +438,8 @@ def check_state(config, snapshot, state):
 
 
 def plan(config, snapshot, users, groups, state):
+    if snapshot.get("audit_only"):
+        raise SyncError("An audit-only snapshot cannot be applied")
     organization = config["casdoor"]["organization"]
     scope_hash = check_state(config, snapshot, state)
     admission = config["admission_group"]
@@ -508,13 +553,27 @@ def plan(config, snapshot, users, groups, state):
                 roles = {role for group_id, role in config["headplane_role_groups"].items() if key in snapshot["group_members"].get(group_id, set())}
                 target_role = next((role for role in ROLE_PRIORITY if role in roles), "member")
         properties["headplane_role"] = target_role
+        if source is not None and config.get("employee_profile", {}).get("enabled"):
+            try:
+                properties.update(profile_property_delta(source.get("profile", {}), properties,
+                    direct_department_ids=source.get("department_ids", []), departments=snapshot["departments"],
+                    root_department_ids=config["feishu"]["root_department_ids"],
+                    job_levels=snapshot.get("job_levels"), job_families=snapshot.get("job_families")))
+            except ProfileError as error:
+                raise SyncError(str(error)) from None
+            properties["feishu_profile_available_fields"] = json.dumps(sorted(source.get("profile", {})), separators=(",", ":"))
+            if snapshot.get("tenant_name"):
+                properties["feishu_tenant_name"] = snapshot["tenant_name"]
         if len(json.dumps(sorted(target_groups), separators=(",", ":")).encode()) > 1000:
             raise SyncError("group claim exceeds the 1000-byte compatibility budget")
         updates = {}
         if sorted(set(current_groups)) != sorted(target_groups):
             updates["groups"] = sorted(target_groups)
-        if properties != (user.get("properties") or {}):
-            updates["properties"] = properties
+        old_properties = user.get("properties") or {}
+        changed_properties = {key: value for key, value in properties.items()
+                              if owned_property(key) and old_properties.get(key) != value}
+        if changed_properties:
+            updates["properties"] = changed_properties
         if next_forbidden != current_forbidden:
             updates["isForbidden"] = next_forbidden
             blocked += int(next_forbidden)
@@ -526,8 +585,13 @@ def plan(config, snapshot, users, groups, state):
     return operations, next_state, report
 
 
+def owned_property(key):
+    return key == "headplane_role" or key.startswith("feishu_")
+
+
 def mutable_digest(user):
-    return digest({"groups": sorted(user.get("groups") or []), "properties": user.get("properties") or {}, "isForbidden": user.get("isForbidden", False)})
+    properties = {key: value for key, value in (user.get("properties") or {}).items() if owned_property(key)}
+    return digest({"groups": sorted(user.get("groups") or []), "properties": properties, "isForbidden": user.get("isForbidden", False)})
 
 
 def save_state(path, state):
@@ -546,14 +610,103 @@ def save_state(path, state):
             os.unlink(temporary)
 
 
+def load_employee_catalogs(feishu, snapshot, config):
+    if config.get("employee_profile", {}).get("enabled") and config["employee_profile"].get("catalog_lookup"):
+        for catalog in ("job_levels", "job_families"):
+            records = feishu.items(catalog)
+            names = {}
+            for record in records:
+                key = identifier(record.get("id"), catalog + " ID")
+                name = record.get("name")
+                if not isinstance(name, str) or key in names:
+                    raise SyncError("Invalid or duplicate employee catalog record")
+                names[key] = name
+            snapshot[catalog] = names
+
+
+def profile_only(config, apply=False, http=None):
+    """Update descriptive properties only; no native imports or access/lifecycle writes."""
+    if not config.get("employee_profile", {}).get("enabled"):
+        raise SyncError("Enable employee_profile before profile-only synchronization")
+    http = http or Http(config["http_timeout_seconds"], config["http_attempts"])
+    feishu = Feishu(config["feishu"], http)
+    snapshot = feishu.snapshot(audit=True)
+    load_employee_catalogs(feishu, snapshot, config)
+    # Keep the same source/scope boundary without advancing lifecycle counters.
+    check_state(config, snapshot, load_state(config["state_file"]))
+    casdoor = Casdoor(config["casdoor"], http)
+    users, _ = casdoor.snapshot()
+    operations, seen = [], set()
+    for user in users:
+        if user.get("owner") != config["casdoor"]["organization"]:
+            raise SyncError("Casdoor returned users from another organization")
+        key = user.get("lark")
+        if not key:
+            continue
+        if key in seen:
+            raise SyncError("Duplicate Casdoor Feishu binding")
+        seen.add(key)
+        source = snapshot["users"].get(key)
+        if source is None:
+            continue
+        identifier(user.get("id"), "Casdoor subject")
+        identifier(user.get("name"), "Casdoor username")
+        try:
+            delta = profile_property_delta(source["profile"], user.get("properties") or {},
+                direct_department_ids=source["department_ids"], departments=snapshot["departments"],
+                root_department_ids=config["feishu"]["root_department_ids"],
+                job_levels=snapshot.get("job_levels"), job_families=snapshot.get("job_families"))
+        except ProfileError as error:
+            raise SyncError(str(error)) from None
+        available = json.dumps(sorted(source["profile"]), separators=(",", ":"))
+        if (user.get("properties") or {}).get("feishu_profile_available_fields") != available:
+            delta["feishu_profile_available_fields"] = available
+        if snapshot.get("tenant_name") and (user.get("properties") or {}).get("feishu_tenant_name") != snapshot["tenant_name"]:
+            delta["feishu_tenant_name"] = snapshot["tenant_name"]
+        if delta:
+            operations.append((user, delta))
+    if apply:
+        for user, delta in operations:
+            user_id = user["owner"] + "/" + user["name"]
+            latest = casdoor.call("get-user", {"id": user_id})
+            if not isinstance(latest, dict) or latest.get("id") != user["id"] or latest.get("lark") != user["lark"] or mutable_digest(latest) != mutable_digest(user):
+                raise SyncError("Casdoor identity or owned properties changed during profile update")
+            casdoor.call("update-user", {"id": user_id, "columns": "properties"}, {"properties": delta}, mutate=True)
+    return {"status": "ok", "mode": "profile-only-apply" if apply else "profile-only-dry-run",
+            "source_users": len(snapshot["users"]), "matched_users": len(set(snapshot["users"]) & seen),
+            "updates": len(operations), "profile_coverage": profile_coverage([user["profile"] for user in snapshot["users"].values()])}
+
+
+def audit_directory(config, http=None):
+    snapshot = Feishu(config["feishu"], http or Http(config["http_timeout_seconds"], config["http_attempts"])).snapshot(audit=True)
+    return {"status": "ok", "mode": "audit", "source_users": len(snapshot["users"]),
+            "departments": len(snapshot["departments"]) - int("0" in snapshot["departments"]),
+            "direct_memberships": sum(len(user["department_ids"]) for user in snapshot["users"].values()),
+            "tenant_name": snapshot.get("tenant_name"), "tenant_verified": bool(snapshot.get("tenant_name")),
+            "users_with_complete_status": sum(user["status"] is not None for user in snapshot["users"].values()),
+            "profile_coverage": profile_coverage([user["profile"] for user in snapshot["users"].values()])}
+
+
 def run(config, apply=False, http=None):
     http = http or Http(config["http_timeout_seconds"], config["http_attempts"])
     state = load_state(config["state_file"])
-    snapshot = Feishu(config["feishu"], http).snapshot()
+    feishu = Feishu(config["feishu"], http)
+    snapshot = feishu.snapshot()
+    load_employee_catalogs(feishu, snapshot, config)
     check_state(config, snapshot, state)
     casdoor = Casdoor(config["casdoor"], http)
-    casdoor.verify_native(config["feishu"])
+    native_columns = casdoor.verify_native(config["feishu"])
     users, groups = casdoor.snapshot()
+    if config.get("employee_profile", {}).get("enabled"):
+        # Missing optional fields must not erase previously stored native values.
+        guards = {"Phone": ("phone", ("mobile",)), "Title": ("title", ("job_title",)), "Email": ("email", ("email", "enterprise_email"))}
+        for user in users:
+            source = snapshot["users"].get(user.get("lark"))
+            if source is None:
+                continue
+            for column, (target, fields) in guards.items():
+                if column in native_columns and user.get(target) and not any(field in source.get("profile", {}) for field in fields):
+                    raise SyncError("Native " + column + " source field is unavailable; refusing to erase existing profile data")
     # Reject known target collisions, changed identities and oversized claims before
     # native import (which itself mutates profiles).
     plan(config, snapshot, users, groups, state)
@@ -580,11 +733,21 @@ def run(config, apply=False, http=None):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True)
-    parser.add_argument("--apply", action="store_true", help="write to Casdoor and durable state")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--apply", action="store_true", help="write to Casdoor and durable state")
+    mode.add_argument("--audit", action="store_true", help="read directory field coverage only; no writes, even if status is unavailable")
+    parser.add_argument("--profile-only", action="store_true", help="update descriptive employee properties only; never groups/roles/status/native imports")
     parser.add_argument("--watch", action="store_true", help="repeat until stopped; failures retry on the next interval")
     args = parser.parse_args(argv)
     try:
         config = load_config(args.config)
+        if args.audit:
+            if args.profile_only:
+                raise SyncError("Choose audit or profile-only mode")
+            if args.watch:
+                raise SyncError("Audit is one-shot; do not combine --audit and --watch")
+            print(json.dumps(audit_directory(config), ensure_ascii=False, sort_keys=True))
+            return 0
         lock = None
         if args.apply:
             lock_path = Path(config["state_file"] + ".lock")
@@ -596,7 +759,7 @@ def main(argv=None):
                 raise SyncError("another worker holds the state lock") from None
         while True:
             try:
-                print(json.dumps(run(config, args.apply), sort_keys=True), flush=True)
+                print(json.dumps(profile_only(config, args.apply) if args.profile_only else run(config, args.apply), sort_keys=True), flush=True)
             except (SyncError, OSError) as error:
                 message = str(error) if isinstance(error, SyncError) else "local state I/O failed"
                 print(json.dumps({"status": "error", "error": message, "completed_at": int(time.time())}), file=sys.stderr, flush=True)

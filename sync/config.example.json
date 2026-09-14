@@ -4,8 +4,12 @@
     "app_id": "cli_REPLACE_ME",
     "app_secret_file": "/run/secrets/feishu_app_secret",
     "tenant_key": "REPLACE_WITH_EXPECTED_TENANT",
-    "root_department_ids": ["0"],
-    "group_ids": ["REPLACE_WITH_CONTACT_GROUP_ID"]
+    "root_department_ids": [
+      "0"
+    ],
+    "group_ids": [
+      "REPLACE_WITH_CONTACT_GROUP_ID"
+    ]
   },
   "casdoor": {
     "base_url": "http://casdoor:8000",
@@ -23,5 +27,9 @@
   "missing_confirmations": 2,
   "allow_reenable": false,
   "http_timeout_seconds": 30,
-  "http_attempts": 3
+  "http_attempts": 3,
+  "employee_profile": {
+    "enabled": false,
+    "catalog_lookup": false
+  }
 }
