@@ -89,7 +89,7 @@ frontendBaseDir = "./web/build"
     if not policy.exists():
         write_private(policy, json.dumps({'groups': {}, 'acls': []}, indent=2) + '\n')
     env = {
-        'RUNTIME_DIR': str(output), 'RUN_UID': str(os.getuid()), 'RUN_GID': str(os.getgid()),
+        'COMPOSE_PROJECT_NAME': 'feishu-tailnet', 'RUNTIME_DIR': str(output), 'RUN_UID': str(os.getuid()), 'RUN_GID': str(os.getgid()),
         'CASDOOR_HOST': site['casdoor_host'], 'HEADSCALE_HOST': site['headscale_host'], 'HEADPLANE_HOST': site['headplane_host'],
         'HEADSCALE_IMAGE': 'feishu/headscale:2026.09-rc.1', 'HEADPLANE_IMAGE': 'feishu/headplane:2026.09-rc.1',
         'CASDOOR_IMAGE': 'feishu/casdoor:2026.09-rc.1', 'POSTGRES_IMAGE': 'postgres:17.6-alpine',
@@ -100,7 +100,7 @@ frontendBaseDir = "./web/build"
     if env_path.exists():
         for line in env_path.read_text().splitlines():
             key, sep, value = line.partition('=')
-            if sep and key.endswith('_IMAGE') and key in env:
+            if sep and key in env and (key.endswith('_IMAGE') or key == 'COMPOSE_PROJECT_NAME'):
                 env[key] = value
     write_private(env_path, ''.join(f'{key}={value}\n' for key, value in env.items()))
     return output

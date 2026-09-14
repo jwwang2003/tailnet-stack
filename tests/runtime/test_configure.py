@@ -21,7 +21,9 @@ class ConfigureTests(unittest.TestCase):
             policy.write_text('{"acls": [{"action":"accept"}]}')
             env = root / 'compose.env'
             env.write_text(env.read_text().replace('caddy:2.10.2-alpine', 'caddy@sha256:' + 'a'*64))
+            env.write_text(env.read_text().replace('COMPOSE_PROJECT_NAME=feishu-tailnet', 'COMPOSE_PROJECT_NAME=restored-tailnet'))
             configure.render(self.site, root)
+            self.assertIn('COMPOSE_PROJECT_NAME=restored-tailnet', env.read_text())
             self.assertEqual(secret, (root / 'secrets/cookie_secret').read_text())
             self.assertIn('accept', policy.read_text())
             self.assertIn('caddy@sha256:', env.read_text())
