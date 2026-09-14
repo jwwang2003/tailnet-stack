@@ -30,6 +30,6 @@ components:
     fork: "https://github.com/jwwang2003/casdoor"
     tag: "v4.3.0"
     upstream_commit: "270882288296b9611e579a931242ff65f104c29b"
-    source_commit: "5d7f75906e1ea2089831a6e14af12de1956ec9e2"
+    source_commit: "4031460c30ffabc3b1c38bf39297a0c56c48070f"
     image: "feishu/casdoor:2026.09-rc.1"
     image_digest: null
