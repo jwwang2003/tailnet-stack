@@ -112,7 +112,7 @@ sudo env http_proxy="$http_proxy" https_proxy="$https_proxy" no_proxy="$no_proxy
 
 Apply the same pattern to other root commands that need network access. Do not make the deployment depend permanently on your laptop proxy.
 
-**Docker distinction:** this is enough for remote HTTPS Git, curl, pip, and appropriately configured host tools. It does not automatically proxy Docker image pulls or `RUN` steps in build containers. Image pulls use the daemon's own proxy settings; build containers have their own network namespace, so their `127.0.0.1` is not the server host. Do not blindly pass this loopback URL as Docker build arguments. Configure a builder-accessible proxy/network and daemon proxy separately if those downloads also fail. See [Docker daemon proxy settings](https://docs.docker.com/engine/daemon/proxy/) and [Docker build/container proxy settings](https://docs.docker.com/engine/cli/proxy/). The SSH forwarding behavior is documented in [OpenSSH's `-R` option](https://man.openbsd.org/ssh#R).
+**Docker distinction:** this is enough for remote HTTPS Git, curl, pip, and appropriately configured host tools. It does not automatically proxy Docker image pulls or `RUN` steps in build containers. Image pulls use the daemon's own proxy settings; build containers have their own network namespace, so their `127.0.0.1` is not the server host. Do not blindly pass this loopback URL as Docker build arguments. For this stack on the remote Linux default Docker builder, follow the [Windows-tunnel Docker build recipe](docker-build-proxy.md): configure the daemon proxy for pulls, then use `BUILD_PROXY_URL=http://127.0.0.1:17890 bash scripts/build-products.sh ..` for build downloads. See [Docker daemon proxy settings](https://docs.docker.com/engine/daemon/proxy/) and [Docker build/container proxy settings](https://docs.docker.com/engine/cli/proxy/). The SSH forwarding behavior is documented in [OpenSSH's `-R` option](https://man.openbsd.org/ssh#R).
 
 ## 3. Install host tools
 
@@ -242,6 +242,8 @@ Generated files:
 The generator preserves existing secrets, policy, and image pins. It **rewrites service configuration**: back up manual configuration edits before rerendering. Do not delete `.runtime` as a troubleshooting shortcut.
 
 ## 6. Build the patched images
+
+If registry access requires your Windows proxy, complete [the Docker tunnel setup](docker-build-proxy.md) first. Shell proxy exports alone do not cover image metadata pulls.
 
 ```sh
 bash scripts/build-products.sh ..

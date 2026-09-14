@@ -59,6 +59,8 @@ bash scripts/build-headscale.sh ..
 bash scripts/build-products.sh ..
 ```
 
+If outbound registry/dependency access requires the Windows SSH tunnel, use the [Docker proxy recipe](docker-build-proxy.md). The opt-in command is `BUILD_PROXY_URL=http://127.0.0.1:17890 bash scripts/build-products.sh ..`; daemon pulls also need their separate proxy setting.
+
 The first helper checks that all three source checkouts are clean, are outside
 `main`/`master`, and match their `source_commit`. The build helpers repeat that
 check. The native Headscale binary goes into ignored `dist/headscale/`; the image
