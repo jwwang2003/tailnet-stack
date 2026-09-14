@@ -200,9 +200,13 @@ class Feishu:
             query["page_token"] = cursor
         raise SyncError("pagination limit exceeded")
 
-    def items(self, path, key="items", query=None):
+    def items(self, path, key="items", query=None, *, allow_empty_terminal=False):
         result = []
         for page in self.pages(path, query):
+            # Feishu's department-children endpoint omits items for empty
+            # terminal pages. Other endpoints retain strict list validation.
+            if allow_empty_terminal and key not in page and page["has_more"] is False:
+                continue
             items = page.get(key)
             if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
                 raise SyncError(f"missing or malformed {key} on {path}")
@@ -254,7 +258,7 @@ class Feishu:
         pending = list(departments)
         queued = set(pending)
         for parent in pending:
-            for department in self.items("departments/" + quote(parent, safe="") + "/children", query={"fetch_child": "false", "department_id_type": "open_department_id", "user_id_type": "open_id"}):
+            for department in self.items("departments/" + quote(parent, safe="") + "/children", query={"fetch_child": "false", "department_id_type": "open_department_id", "user_id_type": "open_id"}, allow_empty_terminal=True):
                 key = identifier(department.get("open_department_id"), "department ID")
                 if key == parent or key == "0":
                     raise SyncError("cyclic department hierarchy")

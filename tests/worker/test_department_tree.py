@@ -26,6 +26,7 @@ class TreeApi(FixtureApi):
             "od_sales": [[]],
         }
         self.fail_child_page = None
+        self.child_page_overrides = {}
         self.change_scope_after_read = False
         self.scope_reads = 0
 
@@ -49,6 +50,8 @@ class TreeApi(FixtureApi):
         page = int(cursor.removeprefix("page/+=")) if cursor else 0
         if self.fail_child_page == (parent, page):
             raise w.SyncError("fixture child-page permission failure")
+        if (parent, page) in self.child_page_overrides:
+            return {"code": 0, "data": copy.deepcopy(self.child_page_overrides[parent, page])}
         pages = self.child_pages[parent]
         return self.page("items", pages[page], page + 1 < len(pages), "page/+=" + str(page + 1))
 
@@ -120,6 +123,43 @@ class DepartmentTreeTests(unittest.TestCase):
                 for child in page:
                     child["parent_department_id"] = parent
         self.assertEqual(self.snapshot()["departments"]["od_platform"]["parent_department_id"], "od_engineering")
+
+    def test_leaf_without_items_is_an_empty_terminal_department_page(self):
+        self.api.child_page_overrides["od_platform", 0] = {"has_more": False}
+        self.api.child_page_overrides["od_sales", 0] = {"has_more": False}
+        self.assertEqual(len(self.snapshot()["departments"]), 4)
+
+    def test_empty_terminal_department_page_preserves_previous_pages(self):
+        self.api.child_page_overrides["0", 1] = {"has_more": False}
+        self.assertEqual(set(self.snapshot()["departments"]), {"0", "od_engineering", "od_platform"})
+        self.assertEqual(len(self.children_calls("0")), 2)
+
+    def test_missing_items_on_nonterminal_department_page_is_rejected(self):
+        self.api.child_page_overrides["od_platform", 0] = {"has_more": True, "page_token": "another-page"}
+        self.assert_rejected_without_writes("missing or malformed items")
+
+    def test_explicit_malformed_department_items_are_rejected(self):
+        for items in (None, {}, "", [None], ["not-a-department"]):
+            with self.subTest(items=items):
+                self.api.child_page_overrides["od_platform", 0] = {"has_more": False, "items": items}
+                self.assert_rejected_without_writes("missing or malformed items")
+
+    def test_missing_or_nonboolean_pagination_status_is_rejected(self):
+        for page in ({}, {"has_more": None}, {"has_more": 0}, {"has_more": "false"}):
+            with self.subTest(page=page):
+                self.api.child_page_overrides["od_platform", 0] = page
+                self.assert_rejected_without_writes("missing pagination status")
+
+    def test_other_endpoints_still_require_explicit_item_lists(self):
+        original = self.api.request
+
+        def missing_users(method, base, path, **kwargs):
+            if path.endswith("users/find_by_department"):
+                return {"code": 0, "data": {"has_more": False}}
+            return original(method, base, path, **kwargs)
+
+        self.api.request = missing_users
+        self.assert_rejected_without_writes("missing or malformed items")
 
     def test_explicit_conflicting_or_invalid_parent_is_rejected(self):
         for parent in ("od_other", "", None, 0):
