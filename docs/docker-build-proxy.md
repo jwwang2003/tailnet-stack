@@ -11,6 +11,8 @@ Two separate network clients need configuration:
 
 The ordinary shell's `https_proxy` covers neither automatically. The reported GCR/Docker Hub metadata timeouts happen before compilation. The subsequent `No such image` messages simply mean the first build failed and the script never reached the other builds.
 
+For Alibaba Cloud accelerator settings, read [mirror scope and verification](aliyun-mirror.md). A Docker Hub accelerator does not replace this GCR/build-dependency proxy path.
+
 ## 1. Keep the Windows tunnel alive and verify it
 
 Keep the Windows proxy running on its HTTP/mixed port 7890 and retain the SSH session with `-R 127.0.0.1:17890:127.0.0.1:7890`. If it has closed, open a new PowerShell session:

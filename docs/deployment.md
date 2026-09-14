@@ -243,6 +243,8 @@ The generator preserves existing secrets, policy, and image pins. It **rewrites 
 
 ## 6. Build the patched images
 
+Using an Alibaba Cloud mirror? Check [its current limitations and verification steps](aliyun-mirror.md) first. It does not cover GCR or module/package downloads.
+
 If registry access requires your Windows proxy, complete [the Docker tunnel setup](docker-build-proxy.md) first. Shell proxy exports alone do not cover image metadata pulls.
 
 ```sh
