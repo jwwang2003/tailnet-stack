@@ -1,6 +1,6 @@
 # Employee handbook
 
-This handbook describes the Feishu sign-in route. Before distributing it, IT must replace the example addresses and complete the client-version table during the pilot.
+This handbook describes device enrollment through the company’s configured sign-in provider. Feishu is one supported option. Before distributing it, IT must replace the example addresses and complete the client-version table during the pilot.
 
 | Item | Your team's value |
 | --- | --- |
@@ -16,7 +16,7 @@ This handbook describes the Feishu sign-in route. Before distributing it, IT mus
 1. Ask IT to confirm that your Feishu account belongs to the approved VPN group. A department change may affect which resources you can use.
 2. Install the official Tailscale client from [Tailscale downloads](https://tailscale.com/download). Choose the version approved by IT. This deployment's Headscale baseline requires at least Tailscale 1.80.0; that minimum alone is not a tested compatibility recommendation.
 3. Set the custom coordination server to `https://vpn.example.com` using the instructions for your device below. Standard Tailscale cloud login uses a different server.
-4. In the browser, choose Feishu at the team's sign-in service. Confirm the correct company/account and consent only to the team's published application.
+4. In the browser, choose the company’s configured provider (for example, Feishu) at the team's sign-in service. Confirm the correct company/account and consent only to the team's published application.
 5. Finish the browser's device-registration confirmation and return to Tailscale. Confirm it shows Connected.
 6. Open the approved resource IT supplied. IT will also provide a resource you should be unable to reach as an onboarding permissions check.
 
@@ -32,7 +32,7 @@ Install the official client. Open PowerShell and run:
 tailscale login --login-server https://vpn.example.com
 ```
 
-Complete Feishu login in the browser. If your computer's policy blocks setup, ask IT; do not change corporate security settings. See `https://vpn.example.com/windows` for the server's version-specific client instructions.
+Complete your company sign-in in the browser. If your computer's policy blocks setup, ask IT; do not change corporate security settings. See `https://vpn.example.com/windows` for the server's version-specific client instructions.
 
 ### macOS
 
@@ -83,3 +83,7 @@ Headplane is primarily for authorized administrators. Ordinary employees may hav
 When contacting support, provide your OS/client version, device name, time of failure, and the error text. Redact login URLs and tokens. Never provide app secrets or API keys.
 
 Report lost or stolen devices immediately so IT can revoke their access. Disconnecting another device or signing out of Feishu is not a substitute for revocation. When leaving the company, follow IT's device-return procedure; access is revoked centrally.
+
+## Interface language
+
+Headplane and the device-registration pages offer **Language / 语言 → English / 简体中文**. Casdoor has its own language menu. Each service remembers its selection independently; switching language does not change your account or access. See [language settings](languages.md).

@@ -14,7 +14,7 @@ components:
     upstream_release_branch: "release-branch/0.29"
     tag: "v0.29.3"
     upstream_commit: "5aff68b5b9921db5ccb88013bb1740077ab872fb"
-    source_commit: "fc99ff8476cfcb816dd52a05d3ae6e7bfbc4fb49"
+    source_commit: "5951677674dcff51a463b0a61496d7bef1a3e917"
     image: "tailnet/headscale:2026.09-rc.1"
     image_digest: null
   headplane:
@@ -22,7 +22,7 @@ components:
     fork: "https://github.com/jwwang2003/headplane"
     tag: "v0.7.1"
     upstream_commit: "30c842ed8dbf011e78596e3a474133ec4069ba79"
-    source_commit: "30c842ed8dbf011e78596e3a474133ec4069ba79"
+    source_commit: "43ac88838f3d2bec1dfc98ab6f49ce84556d92f2"
     image: "tailnet/headplane:2026.09-rc.1"
     image_digest: null
   casdoor:
@@ -30,6 +30,6 @@ components:
     fork: "https://github.com/jwwang2003/casdoor"
     tag: "v4.3.0"
     upstream_commit: "270882288296b9611e579a931242ff65f104c29b"
-    source_commit: "50dcad6b47796622f0896f16c0beef027976677a"
+    source_commit: "35edcab09e3e6c55a92b7b4c15a14b4958e51ca3"
     image: "tailnet/casdoor:2026.09-rc.1"
     image_digest: null

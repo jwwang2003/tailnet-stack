@@ -64,3 +64,5 @@ The lock is a release candidate, not production acceptance evidence. Promotion
 requires live selected-provider login, stable identity linking, OIDC acceptance,
 account lifecycle and access revocation, and backup/restore verification. Local
 fixture tests do not establish compatibility with an untested provider or tenant.
+
+For switchable English and Chinese UI, see [language settings](docs/languages.md).
