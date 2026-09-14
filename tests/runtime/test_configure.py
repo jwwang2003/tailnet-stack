@@ -3,6 +3,8 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
+import yaml
 ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location('configure', ROOT / 'scripts/configure.py')
 configure = importlib.util.module_from_spec(spec)
@@ -11,6 +13,8 @@ spec.loader.exec_module(configure)
 class ConfigureTests(unittest.TestCase):
     def setUp(self):
         self.site = json.loads((ROOT / 'deploy/site.example.json').read_text())
+        self.inputs = json.loads((ROOT / 'image-inputs.json').read_text())
+        self.components = yaml.safe_load((ROOT / 'versions.lock.yaml').read_text())['components']
     def test_rerender_preserves_credentials_policy_and_digest_pins(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -20,7 +24,7 @@ class ConfigureTests(unittest.TestCase):
             policy = root / 'headscale/policy.json'
             policy.write_text('{"acls": [{"action":"accept"}]}')
             env = root / 'compose.env'
-            env.write_text(env.read_text().replace('caddy:2.10.2-alpine', 'caddy@sha256:' + 'a'*64))
+            env.write_text(env.read_text().replace(self.inputs['images']['reverse_proxy'], 'caddy@sha256:' + 'a'*64))
             env.write_text(env.read_text().replace('COMPOSE_PROJECT_NAME=integrated-tailnet', 'COMPOSE_PROJECT_NAME=restored-tailnet'))
             env.write_text(env.read_text().replace('HEADPLANE_ORGANIZATION_NAME=', "HEADPLANE_ORGANIZATION_NAME='飞捷科思 · Fysics'").replace('HEADPLANE_ORGANIZATION_LOGO_URL=', 'HEADPLANE_ORGANIZATION_LOGO_URL=https://example.com/logo.svg'))
             env.write_text(env.read_text().replace('HEADPLANE_ORGANIZATION_NAME_EN=', 'HEADPLANE_ORGANIZATION_NAME_EN=Headplane Fysics').replace('HEADPLANE_ORGANIZATION_NAME_ZH=', 'HEADPLANE_ORGANIZATION_NAME_ZH=Headplane 飞捷科思'))
@@ -43,8 +47,11 @@ class ConfigureTests(unittest.TestCase):
             self.assertEqual(fresh['COMPOSE_PROJECT_NAME'], 'integrated-tailnet')
             for component, key in (('headscale', 'HEADSCALE_IMAGE'),
                                    ('headplane', 'HEADPLANE_IMAGE'),
-                                   ('casdoor', 'CASDOOR_IMAGE'), ('sync', 'WORKER_IMAGE')):
-                self.assertEqual(fresh[key], f'tailnet/{component}:2026.09-rc.3')
+                                   ('casdoor', 'CASDOOR_IMAGE')):
+                self.assertEqual(fresh[key], self.components[component]['image'])
+            for component, key in (('sync', 'WORKER_IMAGE'), ('database', 'POSTGRES_IMAGE'),
+                                   ('reverse_proxy', 'CADDY_IMAGE')):
+                self.assertEqual(fresh[key], self.inputs['images'][component])
             self.assertFalse((root / 'secrets/feishu_app_secret').exists())
             self.assertFalse((root / 'sync/sync.json').exists())
             legacy = dict(fresh, COMPOSE_PROJECT_NAME='feishu-tailnet',
@@ -65,6 +72,27 @@ class ConfigureTests(unittest.TestCase):
         for name in ('db', 'casdoor', 'headscale', 'headplane', 'proxy'):
             self.assertNotIn('worker', services[name].get('depends_on', {}))
         self.assertNotIn('feishu_app_secret', compose['secrets'])
+
+    def test_invalid_source_lock_is_rejected_before_runtime_writes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / 'source'
+            source.mkdir()
+            (source / 'image-inputs.json').write_text(json.dumps(self.inputs))
+            runtime = Path(directory) / 'runtime'
+            for invalid in ([], {'schema_version': 2}, {'schema_version': 1, 'components': []},
+                            {'schema_version': 1, 'components': {}},
+                            *({'schema_version': 1, 'components': self.components | {'headscale': {'image': image}}}
+                              for image in (None, '', '-bad', 'bad\nINJECT=1'))):
+                with self.subTest(lock=invalid), patch.object(configure, 'SOURCE_ROOT', source):
+                    (source / 'versions.lock.yaml').write_text(yaml.safe_dump(invalid))
+                    with self.assertRaises(ValueError):
+                        configure.render(self.site, runtime)
+                    self.assertFalse(runtime.exists())
+            with patch.object(configure, 'SOURCE_ROOT', source):
+                (source / 'versions.lock.yaml').write_text('components: [')
+                with self.assertRaisesRegex(ValueError, 'Invalid source lock YAML'):
+                    configure.render(self.site, runtime)
+                self.assertFalse(runtime.exists())
 
     def test_host_injection_and_collision_rejected(self):
         with tempfile.TemporaryDirectory() as directory:

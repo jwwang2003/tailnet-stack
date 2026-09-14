@@ -80,20 +80,25 @@ class BundleTests(unittest.TestCase):
         self.original = b'# Preserve this comment\nRUN_UID=1000\nDB_SECRET=do-not-copy\nHEADSCALE_IMAGE=old\n'
         self.env.write_bytes(self.original)
         self.env.chmod(0o600)
-        self.export_args = SimpleNamespace(output=self.output, platform='linux/amd64', pull_supporting_images=False)
+        self.config = bundle.inputs()
+        self.architecture = self.config['platform'].split('/')[1]
+        self.foreign_architecture = 'arm64' if self.architecture == 'amd64' else 'amd64'
+        self.export_args = SimpleNamespace(output=self.output, platform=self.config['platform'], pull_supporting_images=False)
         self.import_args = SimpleNamespace(action='import', bundle=self.output, runtime=self.runtime)
         import yaml
         components = yaml.safe_load((self.root / 'versions.lock.yaml').read_text())['components']
         sources = bundle.binding()
-        refs = bundle.inputs()['images'] | {key: value['image'] for key, value in components.items()}
+        refs = self.config['images'] | {key: value['image'] for key, value in components.items()}
+        self.headscale_reference = refs['headscale']
         images = {}
         for number, key in enumerate(bundle.ENV, 1):
             revision = (components[key]['source_commit'] if key in components else
                         sources['integration_commit'] if key == 'sync' else 'upstream-label')
-            image = dict(Id='sha256:' + str(number) * 64, Os='linux', Architecture='amd64',
+            image = dict(Id='sha256:' + str(number) * 64, Os='linux', Architecture=self.architecture,
                          Config={'Labels': {bundle.REVISION: revision}})
             images[refs[key]] = images[image['Id']] = image
         self.docker = FakeDocker(images)
+        self.docker.platform['Architecture'] = {'amd64': 'x86_64', 'arm64': 'aarch64'}[self.architecture]
         patch.object(bundle, 'command', self.docker).start()
         patch('sys.stdout', io.StringIO()).start()
 
@@ -154,7 +159,8 @@ class BundleTests(unittest.TestCase):
         self.assertIn('--multi-image-archive', save)
         self.assertEqual(save[save.index('--format')+1], 'docker-archive')
         pulls = [call[-1] for call in self.docker.calls if call[0] == 'pull']
-        self.assertEqual(pulls, ['docker.io/library/postgres:17.6-alpine','docker.io/library/caddy:2.10.2-alpine'])
+        self.assertEqual(pulls, ['docker.io/library/' + self.config['images'][key]
+                                 for key in ('database', 'reverse_proxy')])
         self.assertTrue(all(image['id'].startswith('sha256:') for image in manifest['images'].values()))
         self.assertTrue(all(engine == 'podman' for engine in self.docker.engines))
         self.docker.engines.clear()
@@ -166,8 +172,8 @@ class BundleTests(unittest.TestCase):
         self.export_args.pull_supporting_images = True
         self.export()
         pulls = [call for call in self.docker.calls if call[0] == 'pull']
-        self.assertEqual(pulls, [('pull', '--platform', 'linux/amd64', 'postgres:17.6-alpine'),
-                                 ('pull', '--platform', 'linux/amd64', 'caddy:2.10.2-alpine')])
+        self.assertEqual(pulls, [('pull', '--platform', self.config['platform'], self.config['images'][key])
+                                 for key in ('database', 'reverse_proxy')])
 
     def test_export_refuses_dirty_checkout_and_existing_output(self):
         (self.root / 'untracked.txt').write_text('dirty')
@@ -180,7 +186,7 @@ class BundleTests(unittest.TestCase):
             self.export()
 
     def test_export_rejects_missing_wrong_platform_or_revision_images(self):
-        reference = 'tailnet/headscale:2026.09-rc.3'
+        reference = self.headscale_reference
         image = copy.deepcopy(self.docker.images[reference])
         for mutation in ('missing', 'platform', 'revision'):
             with self.subTest(mutation=mutation):
@@ -188,7 +194,7 @@ class BundleTests(unittest.TestCase):
                 if mutation == 'missing':
                     del self.docker.images[reference]
                 elif mutation == 'platform':
-                    self.docker.images[reference]['Architecture'] = 'arm64'
+                    self.docker.images[reference]['Architecture'] = self.foreign_architecture
                 else:
                     self.docker.images[reference]['Config']['Labels'] = {}
                 with self.assertRaises((ValueError, subprocess.CalledProcessError)):
@@ -220,8 +226,8 @@ class BundleTests(unittest.TestCase):
 
     def test_foreign_daemon_fails_before_load(self):
         self.export()
-        for platform in ({'OSType': 'windows', 'Architecture': 'x86_64'},
-                         {'OSType': 'linux', 'Architecture': 'aarch64'}):
+        for platform in ({'OSType': 'windows', 'Architecture': self.architecture},
+                         {'OSType': 'linux', 'Architecture': self.foreign_architecture}):
             self.docker.platform = platform
             self.docker.calls.clear()
             with self.assertRaisesRegex(ValueError, 'daemon'):
@@ -264,7 +270,7 @@ class BundleTests(unittest.TestCase):
                 elif mutation == 'alias':
                     item['alias'] = 'mutable:latest'
                 elif mutation == 'platform':
-                    item['architecture'] = 'arm64'
+                    item['architecture'] = self.foreign_architecture
                 elif mutation == 'source':
                     item['source_commit'] = 'bad'
                 else:
