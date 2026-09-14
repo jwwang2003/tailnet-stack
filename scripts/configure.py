@@ -96,14 +96,15 @@ frontendBaseDir = "./web/build"
         'CASDOOR_HOST': site['casdoor_host'], 'HEADSCALE_HOST': site['headscale_host'], 'HEADPLANE_HOST': site['headplane_host'],
         'HEADSCALE_IMAGE': 'tailnet/headscale:2026.09-rc.1', 'HEADPLANE_IMAGE': 'tailnet/headplane:2026.09-rc.1',
         'CASDOOR_IMAGE': 'tailnet/casdoor:2026.09-rc.1', 'POSTGRES_IMAGE': inputs['images']['database'],
-        'CADDY_IMAGE': inputs['images']['reverse_proxy'], 'WORKER_IMAGE': inputs['images']['sync']
+        'CADDY_IMAGE': inputs['images']['reverse_proxy'], 'WORKER_IMAGE': inputs['images']['sync'],
+        'HEADPLANE_ORGANIZATION_NAME': '', 'HEADPLANE_ORGANIZATION_LOGO_URL': ''
     }
     # Preserve operator image digest pins on rerender.
     env_path = output / 'compose.env'
     if env_path.exists():
         for line in env_path.read_text().splitlines():
             key, sep, value = line.partition('=')
-            if sep and key in env and (key.endswith('_IMAGE') or key == 'COMPOSE_PROJECT_NAME'):
+            if sep and key in env and (key.endswith('_IMAGE') or key == 'COMPOSE_PROJECT_NAME' or key.startswith('HEADPLANE_ORGANIZATION_')):
                 env[key] = value
     write_private(env_path, ''.join(f'{key}={value}\n' for key, value in env.items()))
     return output

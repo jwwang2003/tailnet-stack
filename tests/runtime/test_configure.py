@@ -22,7 +22,10 @@ class ConfigureTests(unittest.TestCase):
             env = root / 'compose.env'
             env.write_text(env.read_text().replace('caddy:2.10.2-alpine', 'caddy@sha256:' + 'a'*64))
             env.write_text(env.read_text().replace('COMPOSE_PROJECT_NAME=integrated-tailnet', 'COMPOSE_PROJECT_NAME=restored-tailnet'))
+            env.write_text(env.read_text().replace('HEADPLANE_ORGANIZATION_NAME=', "HEADPLANE_ORGANIZATION_NAME='飞捷科思 · Fysics'").replace('HEADPLANE_ORGANIZATION_LOGO_URL=', 'HEADPLANE_ORGANIZATION_LOGO_URL=https://example.com/logo.svg'))
             configure.render(self.site, root)
+            self.assertIn("HEADPLANE_ORGANIZATION_NAME='飞捷科思 · Fysics'", env.read_text())
+            self.assertIn('HEADPLANE_ORGANIZATION_LOGO_URL=https://example.com/logo.svg', env.read_text())
             self.assertIn('COMPOSE_PROJECT_NAME=restored-tailnet', env.read_text())
             self.assertEqual(secret, (root / 'secrets/cookie_secret').read_text())
             self.assertIn('accept', policy.read_text())

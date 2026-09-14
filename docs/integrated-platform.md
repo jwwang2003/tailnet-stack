@@ -141,3 +141,20 @@ group lifecycle there. Do not mark the field passed merely because Feishu is abs
 Keep `compatibility_verified: false` until the selected deployment passes those gates.
 Use [operations](operations.md) for service backups/restores and access revocation;
 its Feishu-specific reconciliation steps apply only to that adapter.
+
+## Organization name and logo
+
+After rendering, set these optional values in `.runtime/compose.env`:
+
+```dotenv
+HEADPLANE_ORGANIZATION_NAME='飞捷科思 · Fysics'
+HEADPLANE_ORGANIZATION_LOGO_URL='https://assets.example.com/fysics-logo.svg'
+```
+
+Replace the example logo URL with your own browser-accessible image URL. The
+renderer preserves these settings on subsequent runs. Apply them with
+`stack --profile apps up -d --force-recreate headplane`; branding changes do not
+require rebuilding the image. The name replaces the header title and browser-tab
+title; the logo replaces the H mark. Unset, invalid or unavailable logos use the
+original mark. A root-relative image path served by your proxy is also supported;
+this setting does not upload or expose a file from the host filesystem.
