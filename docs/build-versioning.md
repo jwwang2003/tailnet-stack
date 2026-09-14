@@ -189,3 +189,28 @@ After rollback, check existing client connectivity, new Feishu authentication,
 Headplane access, and directory reconciliation. Record the restore timestamp and
 the amount of data lost since the snapshot. Keep synchronization paused until its
 stored identity mappings and current target database agree.
+
+## Offline releases without registry hosting
+
+Use [local build and SSH delivery](local-build-deploy.md). The bundle records the
+integration commit, the lock/input file hashes, all six local image IDs/platforms,
+and a SHA-256 checksum of `images.tar`. Import verifies those identities before
+updating runtime image references. `deploy/compose.offline.yaml` disables pulls.
+
+For production evidence, copy the existing release manifest example, set
+`distribution: offline`, fill `bundle_sha256` from the bundle's `archive.sha256`,
+and use each bundle image's `alias` in the release `images` mapping. Retain all
+existing live validation, backup/restore, migration, and compatibility requirements.
+Offline image IDs are not registry manifest digests; no registry subscription is
+required to record them. Run both the runtime bundle check and the release evidence check:
+
+```sh
+python3 scripts/image-bundle.py check --bundle /path/to/bundle --runtime .runtime
+python3 scripts/release.py check-promotion /path/to/completed-release.yaml \
+  --bundle-manifest /path/to/bundle/manifest.json
+```
+
+The source lock must be marked compatible only after that exact tuple has passed
+acceptance. If changing the source lock or worker changes its recorded commit,
+build/export a new matching bundle; do not edit old manifests to bypass source checks.
+The evidence checker does not replace checking the actual loaded images and tar file.

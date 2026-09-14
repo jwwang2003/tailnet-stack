@@ -29,6 +29,8 @@ to Headscale do not automatically become Headscale network ACL groups.
 
 ## Getting started
 
+**Recommended: [build locally on Windows, transfer over SSH, and load on the server](docs/local-build-deploy.md).** No registry subscription is required; the six-image bundle includes PostgreSQL and Caddy.
+
 1. Read [build and versioning](docs/build-versioning.md) and verify `versions.lock.yaml`.
 2. Follow the [deployment runbook](docs/deployment.md) to render private configuration and bootstrap Casdoor.
 3. Configure the [Feishu worker](sync/README.md) and validate the [identity contract](docs/identity-contract.md).

@@ -64,6 +64,32 @@ class ReleaseChecks(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "differs"):
             release.check_promotion(lock, manifest, b"lock")
 
+class OfflineDistributionChecks(unittest.TestCase):
+    def setUp(self):
+        self.lock = release.read_yaml(ROOT / 'versions.lock.yaml')
+        self.bundle = {'schema_version':1, 'integration_commit':'a'*40,
+            'versions_lock_sha256':hashlib.sha256(b'lock').hexdigest(),
+            'platform':'linux/amd64', 'archive':{'file':'images.tar','sha256':'b'*64},'images':{}}
+        self.manifest = {'integration_commit':'a'*40,'platform':'linux/amd64','bundle_sha256':'b'*64,'images':{}}
+        for key in (*release.COMPONENTS,'sync','database','reverse_proxy'):
+            alias='offline/feishu-' + key.replace('_', '-') + ':sha256-' + 'c'*64
+            rev = self.lock['components'][key]['source_commit'] if key in release.COMPONENTS else 'a'*40 if key=='sync' else None
+            self.bundle['images'][key]={'id':'sha256:'+'c'*64,'os':'linux','architecture':'amd64','revision':rev,'alias':alias}
+            self.manifest['images'][key]=alias
+
+    def test_no_registry_digests_required_for_verified_offline_images(self):
+        release.check_offline_images(self.lock,self.manifest,b'lock',self.bundle)
+
+    def test_altered_bundle_or_missing_image_rejected(self):
+        for mutation in ('archive','revision','platform','missing'):
+            bundle=copy.deepcopy(self.bundle)
+            if mutation=='archive':bundle['archive']['sha256']='d'*64
+            if mutation=='revision':bundle['images']['casdoor']['revision']='f'*40
+            if mutation=='platform':bundle['images']['sync']['architecture']='arm64'
+            if mutation=='missing':bundle['images'].pop('database')
+            with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                release.check_offline_images(self.lock,self.manifest,b'lock',bundle)
+
 
 if __name__ == "__main__":
     unittest.main()

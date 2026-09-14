@@ -1,5 +1,7 @@
 # Deploy the Feishu tailnet: command-by-command guide
 
+**Recommended:** [build on Windows and transfer a six-image bundle over SSH](local-build-deploy.md). That path replaces remote source builds and needs no paid registry. Return to step 7 below for application setup, using the offline Compose overlay from that guide.
+
 This guide takes a **new Ubuntu 24.04 x86-64 server** from an empty installation to a pilot with Feishu login, Casdoor user synchronization, Headscale device enrollment, and Headplane administration. Run server commands as the same non-root deployment user throughout. Steps explicitly marked **laptop** or **browser** run elsewhere.
 
 This is the `2026.09-rc.1` deployment. Local code/configuration tests have passed; a real Feishu tenant login and a complete container/restore rehearsal have not yet been performed. The checkpoints below are intended to produce that evidence. Do not replace patched images with stock Casdoor or Headscale images.

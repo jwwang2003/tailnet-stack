@@ -55,21 +55,61 @@ def verify_sources(lock, workspace):
             raise ValueError(f"{component}: HEAD does not match source_commit")
 
 
-def check_promotion(lock, manifest, lock_bytes):
+def check_offline_images(lock, manifest, lock_bytes, bundle):
+    if not isinstance(bundle, dict) or bundle.get("schema_version") != 1:
+        raise ValueError("Offline distribution requires the exported bundle manifest")
+    if bundle.get("integration_commit") != manifest.get("integration_commit"):
+        raise ValueError("Offline bundle integration commit differs")
+    if bundle.get("versions_lock_sha256") != hashlib.sha256(lock_bytes).hexdigest():
+        raise ValueError("Offline bundle source lock differs")
+    if bundle.get("platform") != manifest.get("platform"):
+        raise ValueError("Offline bundle platform differs")
+    archive = bundle.get("archive", {})
+    checksum = archive.get("sha256", "")
+    if archive.get("file") != "images.tar" or not re.fullmatch(r"[0-9a-f]{64}", str(checksum)):
+        raise ValueError("Offline bundle archive checksum missing")
+    if manifest.get("bundle_sha256") != checksum:
+        raise ValueError("Offline release bundle checksum differs")
+    images = bundle.get("images", {})
+    expected_keys = set(COMPONENTS) | {"sync", "reverse_proxy", "database"}
+    if set(images) != expected_keys:
+        raise ValueError("Offline bundle must contain all six images")
+    for component, image in images.items():
+        image_id = image.get("id", "")
+        if not DIGEST.fullmatch(str(image_id)):
+            raise ValueError("Offline image ID is invalid")
+        component_name = component.replace("_", "-")
+        alias = f"offline/feishu-{component_name}:sha256-{image_id[7:]}"
+        if image.get("alias") != alias or manifest.get("images", {}).get(component) != alias:
+            raise ValueError("Offline image alias differs")
+        if f"{image.get('os')}/{image.get('architecture')}" != manifest.get("platform"):
+            raise ValueError("Offline image platform differs")
+        expected_revision = lock["components"][component]["source_commit"] if component in COMPONENTS else manifest["integration_commit"] if component == "sync" else None
+        if expected_revision and image.get("revision") != expected_revision:
+            raise ValueError("Offline image source revision differs")
+
+
+def check_promotion(lock, manifest, lock_bytes, bundle=None):
     check_lock(lock)
     if lock.get("release", {}).get("compatibility_verified") is not True:
         raise ValueError("Release compatibility is not verified")
-    for component in COMPONENTS:
-        entry = lock["components"][component]
-        if not DIGEST.fullmatch(str(entry.get("image_digest", ""))):
-            raise ValueError(f"{component}: immutable image digest is missing")
-        expected = f"{entry['image'].split('@')[0]}@{entry['image_digest']}"
-        if manifest.get("images", {}).get(component) != expected:
-            raise ValueError(f"{component}: manifest image differs from source lock")
-    for component in ("sync", "reverse_proxy", "database"):
-        ref = manifest.get("images", {}).get(component, "")
-        if not isinstance(ref, str) or "@" not in ref or not DIGEST.fullmatch(ref.rsplit("@", 1)[1]):
-            raise ValueError(f"{component}: immutable manifest image is missing")
+    distribution = manifest.get("distribution", "registry")
+    if distribution == "offline":
+        check_offline_images(lock, manifest, lock_bytes, bundle)
+    elif distribution == "registry":
+        for component in COMPONENTS:
+            entry = lock["components"][component]
+            if not DIGEST.fullmatch(str(entry.get("image_digest", ""))):
+                raise ValueError(f"{component}: immutable image digest is missing")
+            expected = f"{entry['image'].split('@')[0]}@{entry['image_digest']}"
+            if manifest.get("images", {}).get(component) != expected:
+                raise ValueError(f"{component}: manifest image differs from source lock")
+        for component in ("sync", "reverse_proxy", "database"):
+            ref = manifest.get("images", {}).get(component, "")
+            if not isinstance(ref, str) or "@" not in ref or not DIGEST.fullmatch(ref.rsplit("@", 1)[1]):
+                raise ValueError(f"{component}: immutable manifest image is missing")
+    else:
+        raise ValueError("Unknown distribution mode")
     if not SHA.fullmatch(str(manifest.get("integration_commit", ""))):
         raise ValueError("Manifest integration_commit is missing")
     if manifest.get("versions_lock_sha256") != hashlib.sha256(lock_bytes).hexdigest():
@@ -110,6 +150,7 @@ def main():
     verify.add_argument("workspace", type=Path)
     promote = sub.add_parser("check-promotion")
     promote.add_argument("manifest", type=Path)
+    promote.add_argument("--bundle-manifest", type=Path)
     args = parser.parse_args()
     try:
         lock = read_yaml(args.lock)
@@ -128,7 +169,8 @@ def main():
             verify_sources(lock, args.workspace)
             print("Source checkouts match the release lock and are clean.")
         else:
-            check_promotion(lock, read_yaml(args.manifest), args.lock.read_bytes())
+            check_promotion(lock, read_yaml(args.manifest), args.lock.read_bytes(),
+                            json.loads(args.bundle_manifest.read_text()) if args.bundle_manifest else None)
             print("Recorded production promotion conditions passed; no branches or deployment changed.")
     except (ValueError, KeyError, OSError, subprocess.CalledProcessError, yaml.YAMLError) as error:
         print(f"Release check failed: {error}", file=sys.stderr)
