@@ -27,6 +27,9 @@ def render(site, output):
             raise ValueError(f'{field} must be a simple identifier')
     if len({site[x] for x in ('casdoor_host', 'headscale_host', 'headplane_host', 'tailnet_domain')}) != 4:
         raise ValueError('Service hostnames and tailnet DNS suffix must be distinct')
+    inputs = json.loads((Path(__file__).resolve().parents[1] / 'image-inputs.json').read_text())
+    if inputs.get('schema_version') != 1:
+        raise ValueError('Unsupported image input schema')
     output = Path(output).resolve()
     if any(c in str(output) for c in '\n\r$# '):
         raise ValueError('Runtime directory must not contain whitespace, dollar signs, or #')
@@ -92,8 +95,8 @@ frontendBaseDir = "./web/build"
         'COMPOSE_PROJECT_NAME': 'feishu-tailnet', 'RUNTIME_DIR': str(output), 'RUN_UID': str(os.getuid()), 'RUN_GID': str(os.getgid()),
         'CASDOOR_HOST': site['casdoor_host'], 'HEADSCALE_HOST': site['headscale_host'], 'HEADPLANE_HOST': site['headplane_host'],
         'HEADSCALE_IMAGE': 'feishu/headscale:2026.09-rc.1', 'HEADPLANE_IMAGE': 'feishu/headplane:2026.09-rc.1',
-        'CASDOOR_IMAGE': 'feishu/casdoor:2026.09-rc.1', 'POSTGRES_IMAGE': 'postgres:17.6-alpine',
-        'CADDY_IMAGE': 'caddy:2.10.2-alpine', 'WORKER_IMAGE': 'feishu/sync:2026.09-rc.1'
+        'CASDOOR_IMAGE': 'feishu/casdoor:2026.09-rc.1', 'POSTGRES_IMAGE': inputs['images']['database'],
+        'CADDY_IMAGE': inputs['images']['reverse_proxy'], 'WORKER_IMAGE': inputs['images']['sync']
     }
     # Preserve operator image digest pins on rerender.
     env_path = output / 'compose.env'

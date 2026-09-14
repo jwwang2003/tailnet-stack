@@ -3,6 +3,7 @@
 
 import argparse
 import hashlib
+import json
 import re
 import subprocess
 import sys
@@ -102,6 +103,9 @@ def main():
     show = sub.add_parser("field")
     show.add_argument("component", choices=COMPONENTS)
     show.add_argument("field", choices=("source_commit", "upstream_commit", "tag", "image"))
+    auxiliary = sub.add_parser("support-image")
+    auxiliary.add_argument("component", choices=("sync", "database", "reverse_proxy"))
+    sub.add_parser("platform")
     verify = sub.add_parser("verify-sources")
     verify.add_argument("workspace", type=Path)
     promote = sub.add_parser("check-promotion")
@@ -110,7 +114,15 @@ def main():
     try:
         lock = read_yaml(args.lock)
         check_lock(lock)
-        if args.command == "field":
+        if args.command in ("support-image", "platform"):
+            inputs = json.loads((ROOT / "image-inputs.json").read_text())
+            if inputs.get("schema_version") != 1:
+                raise ValueError("Unsupported image input schema")
+            value = inputs["platform"] if args.command == "platform" else inputs["images"][args.component]
+            if not isinstance(value, str) or not value or any(c.isspace() for c in value):
+                raise ValueError("Invalid image input value")
+            print(value)
+        elif args.command == "field":
             print(lock["components"][args.component][args.field])
         elif args.command == "verify-sources":
             verify_sources(lock, args.workspace)

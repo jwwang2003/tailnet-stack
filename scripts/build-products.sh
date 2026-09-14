@@ -7,7 +7,9 @@ workspace=${1:-$(dirname -- "$integration_root")}
 command -v docker >/dev/null || { echo 'Install Docker with BuildKit before building images.' >&2; exit 1; }
 # A reverse SSH proxy is reachable on the Linux host, not the default build bridge.
 # Opt in only for a local, rootful Linux daemon with its embedded Docker builder.
-build_flags=()
+build_platform=${BUILD_PLATFORM:-$(python3 "$integration_root/scripts/release.py" platform)}
+case "$build_platform" in linux/amd64|linux/arm64) ;; *) echo 'BUILD_PLATFORM must be linux/amd64 or linux/arm64.' >&2; exit 1;; esac
+build_flags=(--platform "$build_platform" --load)
 if [[ -n "${BUILD_PROXY_URL:-}" ]]; then
   if [[ ! "$BUILD_PROXY_URL" =~ ^http://127\.0\.0\.1:([0-9]{1,5})$ ]]; then
     echo 'BUILD_PROXY_URL must be http://127.0.0.1:PORT for the SSH tunnel.' >&2
@@ -29,7 +31,7 @@ if [[ -n "${BUILD_PROXY_URL:-}" ]]; then
   export HTTP_PROXY="$BUILD_PROXY_URL" HTTPS_PROXY="$BUILD_PROXY_URL" ALL_PROXY="$BUILD_PROXY_URL"
   export http_proxy="$BUILD_PROXY_URL" https_proxy="$BUILD_PROXY_URL" all_proxy="$BUILD_PROXY_URL"
   export NO_PROXY="${BUILD_NO_PROXY:-localhost,127.0.0.1,::1}" no_proxy="${BUILD_NO_PROXY:-localhost,127.0.0.1,::1}"
-  build_flags=(--builder default --network host)
+  build_flags+=(--builder default --network host)
   for proxy_variable in HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy no_proxy; do
     build_flags+=(--build-arg "$proxy_variable")
   done
@@ -43,6 +45,8 @@ casdoor_image=$(python3 "$integration_root/scripts/release.py" field casdoor ima
 headscale_commit=$(python3 "$integration_root/scripts/release.py" field headscale source_commit)
 headplane_commit=$(python3 "$integration_root/scripts/release.py" field headplane source_commit)
 casdoor_commit=$(python3 "$integration_root/scripts/release.py" field casdoor source_commit)
+sync_image=$(python3 "$integration_root/scripts/release.py" support-image sync)
+integration_commit=$(git -C "$integration_root" rev-parse HEAD)
 
 docker build "${build_flags[@]}" --file "$integration_root/build/headscale.Dockerfile" \
   --build-arg "HEADSCALE_VERSION=${HEADSCALE_VERSION:-v0.29.3-feishu.1}" \
@@ -57,5 +61,6 @@ docker build "${build_flags[@]}" --target STANDARD \
   --label "org.opencontainers.image.revision=$casdoor_commit" \
   --tag "$casdoor_image" "$workspace/casdoor"
 docker build "${build_flags[@]}" --file "$integration_root/build/sync.Dockerfile" \
-  --tag "${WORKER_IMAGE:-feishu/sync:2026.09-rc.1}" "$integration_root"
-echo 'Local candidate images built. Record registry digests and test the complete tuple before production.'
+  --label "org.opencontainers.image.revision=$integration_commit" \
+  --tag "$sync_image" "$integration_root"
+echo 'Local candidate images built. Export an image bundle for SSH deployment, or publish to a registry. Test before production.'

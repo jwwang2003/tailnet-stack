@@ -1,0 +1,15 @@
+# Always combine with compose.yaml. Load and check the image bundle first.
+# Missing images must fail locally rather than triggering registry downloads.
+services:
+  db:
+    pull_policy: never
+  casdoor:
+    pull_policy: never
+  headscale:
+    pull_policy: never
+  headplane:
+    pull_policy: never
+  proxy:
+    pull_policy: never
+  worker:
+    pull_policy: never
