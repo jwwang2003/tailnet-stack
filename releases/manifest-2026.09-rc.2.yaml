@@ -1,0 +1,48 @@
+# Integrated 2026.09 RC2 candidate manifest. Nulls are evidence still to be observed.
+schema_version: 1
+release: "integrated-2026.09.0-rc.2"
+distribution: "offline"
+integration_commit: null  # the release commit; filled at promotion
+versions_lock_sha256: "5e8f4840f33bc9dadf73757638e552e8e6a4c795ede6fbc8f948b299c48a91c3"
+bundle_sha256: null  # recorded in the private inventory at export
+bundle_reference: "fysics-bundle-2026.09-rc.2-01"
+created_at_utc: "2026-09-14T13:09:11Z"
+platform: "linux/amd64"
+images:
+  headscale: "offline/tailnet-headscale:sha256-914ea75822549475ba6ef4d5fbfc2f656701a6c130ee99beb9ce747553fc37c0"
+  headplane: "offline/tailnet-headplane:sha256-1a92413e1ff069e9bdcaaaba0551c44b82d99c5a1c98f9d6c92bd9f17854efdc"
+  casdoor: "offline/tailnet-casdoor:sha256-21c82741d58527c4ec144f62d35aa8016fabdfe4c19810f8ea41e27484b03a56"
+  sync: "offline/tailnet-sync:sha256-5e106b84ead5c8e236a48b9cbfd3588bd834b1a9bad6ef90f2493791a0228722"
+  reverse_proxy: "offline/tailnet-reverse-proxy:sha256-aac61abc4024c323602ccb9ee38bd68b147601f518626b2a055e06944e01c510"
+  database: "offline/tailnet-database:sha256-d741b376874687de90374fd34f55c6b2760e8f7bd7e4ae5cd47f50757fc08cf8"
+image_ids:
+  headscale: "sha256:914ea75822549475ba6ef4d5fbfc2f656701a6c130ee99beb9ce747553fc37c0"
+  headplane: "sha256:1a92413e1ff069e9bdcaaaba0551c44b82d99c5a1c98f9d6c92bd9f17854efdc"
+  casdoor: "sha256:21c82741d58527c4ec144f62d35aa8016fabdfe4c19810f8ea41e27484b03a56"
+  sync: null  # labelled with the release commit
+  reverse_proxy: "sha256:aac61abc4024c323602ccb9ee38bd68b147601f518626b2a055e06944e01c510"
+  database: "sha256:d741b376874687de90374fd34f55c6b2760e8f7bd7e4ae5cd47f50757fc08cf8"
+configuration_sha256: {}
+toolchains:
+  casdoor: "golang:1.25.8, node:20.20.1 (Dockerfile stages), podman 4.9.3 rootless, linux/amd64"
+  sync: "python:3.12.11-slim"
+  headscale: "unchanged from RC1 (image sha256:914ea7582254)"
+  headplane: "unchanged from RC1 (image sha256:1a92413e1ff0)"
+migrations:
+  headscale: null
+  headplane: null
+  casdoor: null
+validation:
+  oauth_and_identity_linking: null
+  directory_lifecycle: "staged only on 2026-09-14: 207/207 users imported and profiled; admission/offboarding waits for contact:user.employee:readonly (releases/2026.09-rc.2-validation.md)"
+  headscale_and_headplane_oidc: null
+  existing_access_revocation: "API path verified on 2026-09-14 (provider-identifier match, preauth key expiry); live node expiry pending an enrolled pilot device"
+  isolated_restore: "2026-09-14 rehearsal: backup 6.6 s, restore 13.1 s, data verified identical (releases/2026.09-rc.2-validation.md)"
+  ordinary_user_authorization: "scripts/verify-casdoor-authz.py: 8/8 pass on casdoor fde2cf8f, bypass reproduced on v4.3.0"
+backup:
+  reference: null
+  restored_successfully_at_utc: null
+rollback:
+  prior_release: "integrated-2026.09-rc.1"
+  prior_images_retained: true
+  pre_migration_backup_reference: null

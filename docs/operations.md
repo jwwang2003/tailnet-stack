@@ -271,6 +271,13 @@ checkout alongside the backup inventory. Retain `site.local.json` separately in
 that protected inventory if it lives outside the runtime directory; the archive
 contains rendered service configuration but does not search the host for site files.
 
+Both helpers require Docker Compose v2 semantics (`ps --services --status`, `cp`,
+`create`, and the literal `--profile '*'`). Unmodified podman-compose stops
+`backup.sh` before any service is touched and stops `restore.sh` after the
+database import; run rehearsals on a Docker Engine host, or provide those
+subcommands through a shim. The 2026-09-14 rehearsal record is in
+`releases/2026.09-rc.2-validation.md`.
+
 Restore first on an isolated host with no public DNS traffic. Supply the exact
 release lock retained with the backup and a new directory/project name:
 
