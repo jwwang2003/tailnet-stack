@@ -6,6 +6,9 @@ import os
 from pathlib import Path
 import re
 import secrets
+import yaml
+
+SOURCE_ROOT = Path(__file__).resolve().parents[1]
 
 HOST = re.compile(r"(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
 NAME = re.compile(r"[A-Za-z0-9_-]{1,80}$")
@@ -27,9 +30,25 @@ def render(site, output):
             raise ValueError(f'{field} must be a simple identifier')
     if len({site[x] for x in ('casdoor_host', 'headscale_host', 'headplane_host', 'tailnet_domain')}) != 4:
         raise ValueError('Service hostnames and tailnet DNS suffix must be distinct')
-    inputs = json.loads((Path(__file__).resolve().parents[1] / 'image-inputs.json').read_text())
+    inputs = json.loads((SOURCE_ROOT / 'image-inputs.json').read_text())
     if inputs.get('schema_version') != 1:
         raise ValueError('Unsupported image input schema')
+    try:
+        lock = yaml.safe_load((SOURCE_ROOT / 'versions.lock.yaml').read_text())
+    except yaml.YAMLError as error:
+        raise ValueError('Invalid source lock YAML') from error
+    if not isinstance(lock, dict) or lock.get('schema_version') != 1:
+        raise ValueError('Unsupported source lock schema')
+    components = lock.get('components')
+    if not isinstance(components, dict):
+        raise ValueError('Source lock components must be a mapping')
+    product_images = {}
+    for component in ('headscale', 'headplane', 'casdoor'):
+        entry = components.get(component)
+        image = entry.get('image') if isinstance(entry, dict) else None
+        if not isinstance(image, str) or not image or image.startswith('-') or re.search(r'\s', image):
+            raise ValueError(f'Invalid source lock image: {component}')
+        product_images[component] = image
     output = Path(output).resolve()
     if any(c in str(output) for c in '\n\r$# '):
         raise ValueError('Runtime directory must not contain whitespace, dollar signs, or #')
@@ -94,8 +113,8 @@ frontendBaseDir = "./web/build"
     env = {
         'COMPOSE_PROJECT_NAME': 'integrated-tailnet', 'RUNTIME_DIR': str(output), 'RUN_UID': str(os.getuid()), 'RUN_GID': str(os.getgid()),
         'CASDOOR_HOST': site['casdoor_host'], 'HEADSCALE_HOST': site['headscale_host'], 'HEADPLANE_HOST': site['headplane_host'],
-        'HEADSCALE_IMAGE': 'tailnet/headscale:2026.09-rc.3', 'HEADPLANE_IMAGE': 'tailnet/headplane:2026.09-rc.3',
-        'CASDOOR_IMAGE': 'tailnet/casdoor:2026.09-rc.3', 'POSTGRES_IMAGE': inputs['images']['database'],
+        'HEADSCALE_IMAGE': product_images['headscale'], 'HEADPLANE_IMAGE': product_images['headplane'],
+        'CASDOOR_IMAGE': product_images['casdoor'], 'POSTGRES_IMAGE': inputs['images']['database'],
         'CADDY_IMAGE': inputs['images']['reverse_proxy'], 'WORKER_IMAGE': inputs['images']['sync'],
         'HEADPLANE_ORGANIZATION_NAME': '', 'HEADPLANE_ORGANIZATION_LOGO_URL': '',
         'HEADPLANE_ORGANIZATION_NAME_EN': '', 'HEADPLANE_ORGANIZATION_NAME_ZH': ''

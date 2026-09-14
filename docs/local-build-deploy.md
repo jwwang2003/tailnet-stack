@@ -138,7 +138,7 @@ This transfer uses SSH directly and does not need the port-7890 reverse proxy. C
 
 ## 7. Prepare only the integration checkout on the server
 
-The server needs Docker Engine/Compose and Python 3.11+, plus this integration repository. It does not need Go, Node, PyYAML for bundle import, or the three product repositories. Existing product checkouts can remain; there is no reason to delete them during deployment.
+The server needs Docker Engine/Compose and Python 3.11+, plus this integration repository. Configuration rendering reads product image defaults from `versions.lock.yaml` and requires PyYAML: install `requirements-build.txt` in the active Python environment before running `scripts/configure.py`. Bundle import/check use only Python's standard library. Deploying finished images does not require Go, Node or the three product repositories. Existing product checkouts can remain.
 
 If the integration checkout already exists:
 
