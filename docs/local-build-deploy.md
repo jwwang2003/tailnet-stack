@@ -12,7 +12,7 @@ On `sh-network-01`:
 uname -m
 ```
 
-Use `linux/amd64` for `x86_64`, or `linux/arm64` for `aarch64`. The examples below assume `linux/amd64`. Match this value in both build and export commands; an image for the wrong architecture is rejected by the bundle checks.
+Use `linux/amd64` for `x86_64`, or `linux/arm64` for `aarch64`. The examples below assume `linux/amd64`. The checked-in `image-inputs.json` currently pins `linux/amd64`. For an ARM server, change that platform on a feature branch, commit it, and use `linux/arm64` for both build and export. The server must use that same committed configuration. An image for the wrong architecture is rejected by the bundle checks.
 
 ## 2. Prepare Windows Docker Desktop and WSL
 

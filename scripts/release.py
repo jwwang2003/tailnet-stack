@@ -72,9 +72,11 @@ def check_offline_images(lock, manifest, lock_bytes, bundle):
         raise ValueError("Offline release bundle checksum differs")
     images = bundle.get("images", {})
     expected_keys = set(COMPONENTS) | {"sync", "reverse_proxy", "database"}
-    if set(images) != expected_keys:
+    if not isinstance(images, dict) or set(images) != expected_keys:
         raise ValueError("Offline bundle must contain all six images")
     for component, image in images.items():
+        if not isinstance(image, dict):
+            raise ValueError("Invalid offline image record")
         image_id = image.get("id", "")
         if not DIGEST.fullmatch(str(image_id)):
             raise ValueError("Offline image ID is invalid")
