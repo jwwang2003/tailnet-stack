@@ -51,13 +51,42 @@ Expected: the exact accelerator URL is listed. If reload is unsupported by your 
 
 ## Interaction with the Windows SSH proxy
 
-If the Docker daemon is still configured to proxy through `127.0.0.1:17890`, add the **exact accelerator hostname** to the effective daemon `NO_PROXY` setting so mirror requests originate directly from the ECS server. For the runtime drop-in from our proxy guide, its line would be:
+If the Docker daemon uses the Windows tunnel, mirror requests must bypass it so they originate directly from ECS. This is now part of the default documented proxy setup: use the helper to add **all configured registry mirror hostnames** automatically.
 
-```ini
-Environment="NO_PROXY=localhost,127.0.0.1,::1,mra3ydig.mirror.aliyuncs.com"
+From the remote server's integration checkout:
+
+```sh
+export http_proxy=http://127.0.0.1:17890
+export https_proxy="$http_proxy"
+git pull --ff-only
+# Preview the exact hostnames and merged exclusion list:
+sudo python3 scripts/sync-mirror-no-proxy.py
+# Validate with dockerd, back up daemon.json, and save:
+sudo python3 scripts/sync-mirror-no-proxy.py --apply
 ```
 
-Preserve other required bypass entries. Updating systemd environment variables needs `systemctl daemon-reload` and a scheduled Docker restart; it is separate from reloading `registry-mirrors`. If `daemon.json` contains explicit proxy settings, those take precedence—update its `proxies.no-proxy` instead of assuming a drop-in overrides it.
+The helper reads `/etc/docker/daemon.json` and the running local Docker daemon. For your mirror it adds `mra3ydig.mirror.aliyuncs.com`, without `https://` or a trailing slash. It preserves other mirror entries, existing exclusions, HTTP/HTTPS proxy URLs, and unrelated daemon settings. It writes the effective exclusion list to `proxies.no-proxy` in `daemon.json`; this takes precedence over a systemd `NO_PROXY` environment value. No wildcard for all Alibaba domains is added.
+
+Example resulting configuration shape (other existing keys remain):
+
+```json
+{
+  "registry-mirrors": ["https://mra3ydig.mirror.aliyuncs.com"],
+  "proxies": {
+    "no-proxy": "localhost,127.0.0.1,::1,mra3ydig.mirror.aliyuncs.com"
+  }
+}
+```
+
+This command does not start or restart Docker. Apply it at a suitable time because restarting Docker can interrupt existing containers, including sub2api:
+
+```sh
+sudo systemctl restart docker
+docker info --format '{{.NoProxy}}'
+docker info --format '{{json .RegistryConfig.Mirrors}}'
+```
+
+Both the mirror configuration and the exclusion hostname should appear. The helper merges mirrors **when run**, not continuously: rerun after adding/changing mirrors. It intentionally keeps old exclusions, including removed mirrors, rather than deleting what might be an operator rule; clean obsolete entries up explicitly if needed. If Docker is stopped, `--configured-only` reads only the file and shell exclusions, without running `docker info`.
 
 The mirror can return 403 if its requests exit through the laptop/proxy rather than an eligible ECS source. Do not expose the SSH proxy to public interfaces to work around this.
 

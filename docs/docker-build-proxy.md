@@ -37,7 +37,7 @@ A registry `401` is a normal unauthenticated challenge and confirms a completed 
 
 ## 2. Give the Docker daemon the temporary proxy
 
-**Restarting Docker can interrupt existing containers, including sub2api if it runs on this same daemon. Perform the restart at an appropriate time.** This changes a local systemd runtime drop-in; it does not overwrite `/etc/docker/daemon.json` or persist across a reboot.
+**Restarting Docker can interrupt existing containers, including sub2api if it runs on this same daemon. Perform the restart at an appropriate time.** The HTTP/HTTPS proxy is set in a systemd runtime drop-in and does not persist across reboot. The helper below additionally saves mirror bypass hostnames in `daemon.json`, preserving its other settings and creating a backup.
 
 ```sh
 sudo mkdir -p /run/systemd/system/docker.service.d
@@ -47,10 +47,14 @@ Environment="HTTP_PROXY=http://127.0.0.1:17890"
 Environment="HTTPS_PROXY=http://127.0.0.1:17890"
 Environment="NO_PROXY=localhost,127.0.0.1,::1"
 EOF
+# From the updated integration repository, add all configured mirrors to NO_PROXY.
+sudo python3 scripts/sync-mirror-no-proxy.py --apply
 sudo systemctl daemon-reload
 sudo systemctl restart docker
 docker info --format 'HTTP proxy={{.HTTPProxy}} HTTPS proxy={{.HTTPSProxy}}'
 ```
+
+The helper reads both `registry-mirrors` in `/etc/docker/daemon.json` and the running local daemon's mirrors. It merges their hostnames with existing JSON/runtime/shell exclusions into `proxies.no-proxy`, preserving HTTP/HTTPS proxy URLs. Rerun it after adding mirrors; Docker does not continuously synchronize these fields. It never adds registry origins such as `gcr.io` unless they are explicitly configured as mirrors.
 
 Expected: both effective proxy fields show `http://127.0.0.1:17890`. Settings in `daemon.json` or explicit daemon proxy flags take precedence over environment variables. If the effective values differ, inspect the existing daemon configuration and update that deliberately rather than stacking conflicting proxy settings. Keep any credentials in existing proxy configuration private.
 
@@ -98,7 +102,7 @@ Also pull the deployment's PostgreSQL and Caddy images while the daemon proxy is
 
 ## 5. Remove the temporary daemon dependency when finished
 
-Once required images are available, remove only this recipe's runtime drop-in and restart Docker at an appropriate time:
+The mirror-host exclusions saved in `daemon.json` can remain after the tunnel is removed. Once required images are available, remove only this recipe's runtime drop-in and restart Docker at an appropriate time:
 
 ```sh
 sudo rm /run/systemd/system/docker.service.d/90-feishu-tunnel-proxy.conf
