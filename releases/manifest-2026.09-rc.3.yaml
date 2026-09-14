@@ -1,0 +1,55 @@
+# Integrated 2026.09 RC3 candidate manifest. Validation entries use the
+# mapping form the promotion checker requires; passed: false marks evidence
+# still to be observed on the staging/production site.
+schema_version: 1
+release: "integrated-2026.09.0-rc.3"
+distribution: "offline"
+integration_commit: null  # the release commit; filled at promotion
+versions_lock_sha256: "ef5611f3cb3fcdcae772d05c02ff891c086b79aba20e2716e9fc21819c3c7264"
+bundle_sha256: null  # recorded in the private inventory at export
+bundle_reference: "fysics-bundle-2026.09-rc.3-01"
+created_at_utc: "2026-09-14T14:40:36Z"
+platform: "linux/amd64"
+images:
+  headscale: "offline/tailnet-headscale:sha256-914ea7582254"
+  headplane: "offline/tailnet-headplane:sha256-1a92413e1ff0"
+  casdoor: "offline/tailnet-casdoor:sha256-21c82741d585"
+  sync: null  # labelled with the release commit; see the bundle manifest
+  reverse_proxy: "offline/tailnet-reverse-proxy:sha256-aac61abc4024"
+  database: "offline/tailnet-database:sha256-d741b3768746"
+configuration_sha256: {}
+toolchains:
+  casdoor: "golang:1.25.8, node:20.20.1 (Dockerfile stages), podman 4.9.3 rootless, linux/amd64"
+  sync: "python:3.12.11-slim"
+  headscale: "unchanged from RC1 (image sha256:914ea7582254)"
+  headplane: "unchanged from RC1 (image sha256:1a92413e1ff0)"
+migrations:
+  headscale: null
+  headplane: null
+  casdoor: null
+validation:
+  oauth_and_identity_linking:
+    passed: false
+    evidence: "pending staging login with both OIDC clients"
+  directory_lifecycle:
+    passed: false
+    evidence: "staged population only (207/207 users, releases/2026.09-rc.2-validation.md); full lifecycle waits for contact:user.employee:readonly"
+  headscale_and_headplane_oidc:
+    passed: false
+    evidence: "pending staging site with public DNS/TLS"
+  existing_access_revocation:
+    passed: false
+    evidence: "fixture proof of both retry paths (releases/2026.09-rc.3-validation.md); API-level preauth-key expiry verified; live node expiry pending an enrolled pilot device"
+  isolated_restore:
+    passed: true
+    evidence: "2026-09-14 isolated rehearsal, backup 6.6 s, restore 13.1 s, data identical (releases/2026.09-rc.2-validation.md); repeat on the Docker Compose v2 host at acceptance"
+  ordinary_user_authorization:
+    passed: true
+    evidence: "scripts/verify-casdoor-authz.py 8/8 on casdoor fde2cf8f (releases/2026.09-rc.2-validation.md)"
+backup:
+  reference: null
+  restored_successfully_at_utc: null
+rollback:
+  prior_release: "integrated-2026.09-rc.2"
+  prior_images_retained: true
+  pre_migration_backup_reference: null

@@ -1,5 +1,12 @@
 # Release review and deployment sequence
 
+**Update (2026-09-14, later the same day):** both code blockers below are fixed in
+integration `cf8bf70` (RC3) with 45 regression tests, including independent
+reproductions of the two sequences; see the
+[RC3 validation record](../releases/2026.09-rc.3-validation.md). The review text
+below is kept as written for RC2 `7cf3f64`. The tenant, pilot and promotion gates
+still apply unchanged.
+
 Reviewed 2026-09-14 at integration `7cf3f64`, Casdoor `fde2cf8f`, Headscale
 `59516776`, and Headplane `fb7ae3e`. **RC2 is suitable for continued staging
 validation; production promotion is blocked.** No deployment or branch was
