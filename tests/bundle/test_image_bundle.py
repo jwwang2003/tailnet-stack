@@ -20,14 +20,16 @@ class FakeDocker:
     def __init__(self, images):
         self.images = images
         self.calls = []
+        self.engines = []
         self.platform = {'OSType': 'linux', 'Architecture': 'x86_64'}
         self.bad_load = False
         self.fail_save = False
 
     def __call__(self, *args):
-        if args[0] != 'docker':
+        if args[0] not in ('docker', 'podman'):
             return subprocess.run(args, check=True, text=True, stdout=subprocess.PIPE).stdout.strip()
         self.calls.append(args[1:])
+        self.engines.append(args[0])
         command = args[1:3]
         if command == ('info', '--format'):
             return json.dumps(self.platform)
@@ -37,11 +39,14 @@ class FakeDocker:
             image = self.images.get(args[3])
             if image is None:
                 raise subprocess.CalledProcessError(1, args)
+            image = copy.deepcopy(image)
+            if args[0] == 'podman': image['Id'] = image['Id'].removeprefix('sha256:')
             return json.dumps([image])
         if command == ('image', 'save'):
             if self.fail_save:
                 raise subprocess.CalledProcessError(1, args)
-            Path(args[4]).write_text(json.dumps([self.images[image_id] for image_id in args[5:]]))
+            output_pos = args.index('--output') + 1
+            Path(args[output_pos]).write_text(json.dumps([self.images[image_id] for image_id in args[output_pos+1:]]))
             return ''
         if command == ('image', 'load'):
             for image in json.loads(Path(args[4]).read_text()):
@@ -121,6 +126,23 @@ class BundleTests(unittest.TestCase):
         self.import_args.action = 'import'
         bundle.use_bundle(self.import_args)
         self.assertEqual(len(list(self.runtime.glob('compose.env.backup-*'))), 1)
+
+    def test_podman_export_uses_docker_multi_image_archive_and_normalizes_ids(self):
+        self.export_args.engine = 'podman'
+        self.export_args.pull_supporting_images = True
+        manifest = self.export()
+        self.assertEqual(manifest['exporter'], 'podman')
+        save = next(call for call in self.docker.calls if call[:2] == ('image','save'))
+        self.assertIn('--multi-image-archive', save)
+        self.assertEqual(save[save.index('--format')+1], 'docker-archive')
+        pulls = [call[-1] for call in self.docker.calls if call[0] == 'pull']
+        self.assertEqual(pulls, ['docker.io/library/postgres:17.6-alpine','docker.io/library/caddy:2.10.2-alpine'])
+        self.assertTrue(all(image['id'].startswith('sha256:') for image in manifest['images'].values()))
+        self.assertTrue(all(engine == 'podman' for engine in self.docker.engines))
+        self.docker.engines.clear()
+        self.docker.images.clear()
+        bundle.use_bundle(self.import_args)
+        self.assertTrue(all(engine == 'docker' for engine in self.docker.engines))
 
     def test_pull_only_supporting_images_with_platform(self):
         self.export_args.pull_supporting_images = True

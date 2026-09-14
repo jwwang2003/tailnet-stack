@@ -1,5 +1,7 @@
 # Build on Windows, transfer images over SSH, deploy without a registry
 
+**Using Podman instead of Docker Desktop? Follow [the Podman build guide](podman-build.md) for local setup/build/export, then use the shared transfer and server-import steps here.**
+
 This is the preferred initial deployment path for Fysics. You do not need to buy ACR or set up any registry. Windows performs the builds and downloads. The server receives six finished Linux images plus metadata, then starts them with the existing runtime configuration.
 
 The bundle contains **Headscale, Headplane, Casdoor, the Feishu worker, PostgreSQL, and Caddy**. It contains no `.runtime` directory, application credentials, database contents, or TLS private keys. Application configuration and first-time Feishu/Casdoor setup still happen on the server.

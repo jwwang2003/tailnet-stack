@@ -29,7 +29,7 @@ to Headscale do not automatically become Headscale network ACL groups.
 
 ## Getting started
 
-**Recommended: [build locally on Windows, transfer over SSH, and load on the server](docs/local-build-deploy.md).** No registry subscription is required; the six-image bundle includes PostgreSQL and Caddy.
+**Recommended: [build locally on Windows, transfer over SSH, and load on the server](docs/local-build-deploy.md).** No registry subscription is required; the six-image bundle includes PostgreSQL and Caddy. [Native rootless Podman in WSL](docs/podman-build.md) is also supported for local builds and export; the server still uses Docker.
 
 1. Read [build and versioning](docs/build-versioning.md) and verify `versions.lock.yaml`.
 2. Follow the [deployment runbook](docs/deployment.md) to render private configuration and bootstrap Casdoor.

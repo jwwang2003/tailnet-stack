@@ -78,12 +78,14 @@ def alias(key, image_id):
     return 'offline/feishu-' + key.replace('_', '-') + ':sha256-' + image_id[7:]
 
 
-def inspect(reference):
-    result = json.loads(command('docker', 'image', 'inspect', reference))
+def inspect(reference, engine='docker'):
+    result = json.loads(command(engine, 'image', 'inspect', reference))
     require(isinstance(result, list) and len(result) == 1, 'Expected one image: ' + reference)
     image = result[0]
     require(isinstance(image, dict), 'Invalid Docker image inspection')
     image_id = image.get('Id', '')
+    if engine == 'podman' and isinstance(image_id, str) and SHA.fullmatch(image_id):
+        image_id = 'sha256:' + image_id
     require(isinstance(image_id, str) and image_id.startswith('sha256:') and
             SHA.fullmatch(image_id[7:]), 'Invalid image ID: ' + reference)
     labels = (image.get('Config') or {}).get('Labels') or {}
@@ -101,6 +103,8 @@ def validate_image(actual, expected, platform, reference):
 
 
 def export_bundle(args):
+    engine = getattr(args, 'engine', 'docker')
+    require(engine in ('docker', 'podman'), 'Export engine must be docker or podman')
     output = args.output.resolve()
     require(not output.exists() and not output.is_symlink(), 'Output already exists: ' + str(output))
     require(not command('git', '-C', str(ROOT), 'status', '--porcelain', '--untracked-files=all'),
@@ -117,7 +121,7 @@ def export_bundle(args):
         raise ValueError('Invalid versions.lock.yaml: ' + str(error)) from error
     require(isinstance(lock, dict) and lock.get('schema_version') == 1 and
             isinstance(lock.get('components'), dict), 'Invalid versions.lock.yaml')
-    manifest = dict(schema_version=1, platform=args.platform, **binding(), images={})
+    manifest = dict(schema_version=1, exporter=engine, platform=args.platform, **binding(), images={})
     references = dict(config['images'])
     revisions = dict(sync=manifest['integration_commit'], database=None, reverse_proxy=None)
     for key in PRODUCTS:
@@ -130,9 +134,14 @@ def export_bundle(args):
         revisions[key] = revision
     if args.pull_supporting_images:
         for key in ('database', 'reverse_proxy'):
-            command('docker', 'pull', '--platform', args.platform, references[key])
+            reference = references[key]
+            if engine == 'podman':
+                first = reference.split('/')[0]
+                if '/' not in reference or not ('.' in first or ':' in first or first == 'localhost'):
+                    reference = 'docker.io/' + (reference if '/' in reference else 'library/' + reference)
+            command(engine, 'pull', '--platform', args.platform, reference)
     for key in ENV:
-        actual = inspect(references[key])
+        actual = inspect(references[key], engine)
         # Supporting images may carry their own upstream revision label.
         if key not in PRODUCTS and key != 'sync':
             revisions[key] = actual['revision']
@@ -144,7 +153,8 @@ def export_bundle(args):
     staging = Path(tempfile.mkdtemp(prefix='.image-bundle-', dir=output.parent))
     try:
         archive = staging / 'images.tar'
-        command('docker', 'image', 'save', '--output', str(archive),
+        save_flags = ['--format', 'docker-archive', '--multi-image-archive'] if engine == 'podman' else []
+        command(engine, 'image', 'save', *save_flags, '--output', str(archive),
                 *(image['id'] for image in manifest['images'].values()))
         manifest['archive'] = dict(file='images.tar', sha256=digest(archive))
         (staging / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
@@ -277,6 +287,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     actions = parser.add_subparsers(dest='action', required=True)
     export = actions.add_parser('export')
+    export.add_argument('--engine', choices=('docker', 'podman'), default='docker')
     export.add_argument('--output', type=Path, required=True)
     export.add_argument('--platform', choices=('linux/amd64', 'linux/arm64'), default='linux/amd64')
     export.add_argument('--pull-supporting-images', action='store_true')
