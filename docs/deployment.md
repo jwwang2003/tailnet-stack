@@ -51,6 +51,69 @@ The example uses public DERP servers; it does not deploy a local DERP/STUN serve
 
 Use persistent host storage for the repository's `.runtime/` directory and Docker's named volumes. Keep off-host backups. Run one active Headscale database writer. Builds include two web applications and can require substantially more memory/disk than steady-state operation; watch memory and free space rather than sizing by employee count alone.
 
+## Optional: use your laptop's proxy while setting up the server
+
+If your proxy application listens on **local port 7890**, run the following on your **laptop**, not on the server. Port 7890 must accept HTTP proxy requests/CONNECT (a mixed HTTP/SOCKS port works). The helper assumes an HTTP proxy, not a SOCKS-only listener.
+
+From a local checkout of the integration repository:
+
+```sh
+bash scripts/remote-proxy-shell.sh wjw@YOUR_SERVER_IP
+```
+
+If the laptop does not have the repository, download the helper using your local proxy and inspect it before running:
+
+```sh
+curl --fail --location --proxy http://127.0.0.1:7890 \
+  https://raw.githubusercontent.com/jwwang2003/tailscale-feishu-integration/release/feishu-2026.09-rc.1/scripts/remote-proxy-shell.sh \
+  -o remote-proxy-shell.sh
+less remote-proxy-shell.sh
+bash remote-proxy-shell.sh wjw@YOUR_SERVER_IP
+```
+
+This opens a remote Bash login session with the following path:
+
+```text
+Remote Git/curl/pip
+  -> remote 127.0.0.1:17890
+  -> encrypted SSH reverse tunnel
+  -> laptop 127.0.0.1:7890
+  -> laptop proxy's outbound connection
+```
+
+The script exports `http_proxy`, `https_proxy`, `all_proxy`, and their uppercase equivalents to `http://127.0.0.1:17890`. It also sets `no_proxy`/`NO_PROXY` for loopback and internal Compose service names. The `https_proxy` value intentionally uses `http://`: the HTTP proxy carries HTTPS using CONNECT.
+
+For a nonstandard SSH port, a different remote port, or another local proxy port:
+
+```sh
+bash scripts/remote-proxy-shell.sh --ssh-port 2222 --remote-port 17891 --local-port 7890 wjw@YOUR_SERVER_IP
+```
+
+SSH aliases and identity/jump-host settings from `~/.ssh/config` work. The script disables connection multiplexing for this session so the tunnel does not remain attached to a reused SSH master after you exit.
+
+**In the opened remote shell, verify:**
+
+```sh
+printf 'Proxy: %s\n' "$https_proxy"
+ss -ltn '( sport = :17890 )'
+curl --head --fail --max-time 20 https://github.com
+git ls-remote https://github.com/jwwang2003/tailscale-feishu-integration.git refs/heads/release/feishu-2026.09-rc.1
+```
+
+Expected: proxy URL `http://127.0.0.1:17890`, a loopback listener, an HTTPS response, and a Git commit/ref. Adjust the `ss` port if you selected another port. If forwarding fails, confirm the local proxy is running, the remote port is unused, and SSH server policy permits remote TCP forwarding. Keep `GatewayPorts` disabled or `clientspecified`; do not force wildcard listeners. No cloud firewall opening for port 17890 is needed.
+
+Keep this session open while using the proxy. `exit`, laptop sleep, or a broken SSH connection ends the tunnel. Environment variables apply to this shell and child processes, not other existing SSH sessions, systemd services, or future logins. Nothing is written to your remote `.bashrc` or system proxy configuration.
+
+Commands run through `sudo` may lose these variables. For a one-off package operation, pass them explicitly:
+
+```sh
+sudo env http_proxy="$http_proxy" https_proxy="$https_proxy" no_proxy="$no_proxy" apt-get update
+```
+
+Apply the same pattern to other root commands that need network access. Do not make the deployment depend permanently on your laptop proxy.
+
+**Docker distinction:** this is enough for remote HTTPS Git, curl, pip, and appropriately configured host tools. It does not automatically proxy Docker image pulls or `RUN` steps in build containers. Image pulls use the daemon's own proxy settings; build containers have their own network namespace, so their `127.0.0.1` is not the server host. Do not blindly pass this loopback URL as Docker build arguments. Configure a builder-accessible proxy/network and daemon proxy separately if those downloads also fail. See [Docker daemon proxy settings](https://docs.docker.com/engine/daemon/proxy/) and [Docker build/container proxy settings](https://docs.docker.com/engine/cli/proxy/). The SSH forwarding behavior is documented in [OpenSSH's `-R` option](https://man.openbsd.org/ssh#R).
+
 ## 3. Install host tools
 
 Skip Docker installation if a working, supported Docker Engine and Compose plugin are already installed. The following installation path assumes a fresh Ubuntu 24.04 host; it does not remove any existing container runtime.
@@ -92,17 +155,17 @@ Expected: Docker shows a Server section without permission errors, Compose is in
 
 ## 4. Get the four repositories at the matching release
 
-Give the server read access to your GitHub repositories using your normal SSH/deploy-key process. Test it with `ssh -T git@github.com`; GitHub's successful authentication message can still return exit status 1 because it does not provide shell access.
+Use **HTTPS Git URLs** for the server checkout so Git can use the session's HTTP proxy. Public repositories need no GitHub credentials. For private repositories, use a credential manager or enter an appropriately scoped GitHub token at Git's password prompt; do not embed tokens in clone URLs. SSH is still used to log into the server and carry the optional proxy tunnel, but GitHub checkout does not require an SSH/deploy key.
 
 For a **new server checkout**:
 
 ```sh
 mkdir -p "$HOME/tailscale-open"
 cd "$HOME/tailscale-open"
-git clone --branch release/feishu-2026.09-rc.1 git@github.com:jwwang2003/headscale.git
-git clone --branch release/feishu-2026.09-rc.1 git@github.com:jwwang2003/headplane.git
-git clone --branch release/feishu-2026.09-rc.1 git@github.com:jwwang2003/casdoor.git
-git clone --branch release/feishu-2026.09-rc.1 git@github.com:jwwang2003/tailscale-feishu-integration.git
+git clone --branch release/feishu-2026.09-rc.1 https://github.com/jwwang2003/headscale.git
+git clone --branch release/feishu-2026.09-rc.1 https://github.com/jwwang2003/headplane.git
+git clone --branch release/feishu-2026.09-rc.1 https://github.com/jwwang2003/casdoor.git
+git clone --branch release/feishu-2026.09-rc.1 https://github.com/jwwang2003/tailscale-feishu-integration.git
 cd tailscale-feishu-integration
 python3 -m venv .venv
 . .venv/bin/activate
@@ -113,6 +176,17 @@ python scripts/release.py verify-sources ..
 Expected: `Source checkouts match the release lock and are clean.` All three product repositories must be siblings of the integration repository. If using the existing development workspace, skip cloning and run the verification from its integration directory.
 
 If verification reports a mismatch, compare `git -C ../casdoor rev-parse HEAD` (or the named product) with `versions.lock.yaml`. Fetch and check out the **recorded** commit on a downstream/build branch. Do not change the lock just to make an unknown checkout pass, and do not reset an existing working tree with unsaved changes.
+
+For server repositories cloned earlier with SSH, change only their origin URLs (branches and commits stay unchanged):
+
+```sh
+cd "$HOME/tailscale-open"
+for repo in headscale headplane casdoor tailscale-feishu-integration; do
+  git -C "$repo" remote set-url origin "https://github.com/jwwang2003/$repo.git"
+  git -C "$repo" remote get-url origin
+done
+cd tailscale-feishu-integration
+```
 
 All remaining **server** commands run from `~/tailscale-open/tailscale-feishu-integration` unless stated otherwise.
 
