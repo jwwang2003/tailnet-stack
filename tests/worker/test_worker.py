@@ -56,12 +56,18 @@ class FixtureApi:
         if path.endswith("/scopes"):
             return {"code": 0, "data": {**self.scope, "has_more": False}}
         if path.endswith("/children"):
-            # Deliberately return a child before its parent, across pages.
+            assert query["fetch_child"] == "false"
+            parent = path.split("/")[-2]
+            children = [item for item in self.departments if item["parent_department_id"] == parent]
             if "page_token" not in query:
-                return self.page("items", self.departments[:1], True, "next/page+token=")
+                return self.page("items", children[:1], len(children) > 1, "next/page+token=")
             if query["page_token"] != "next/page+token=":
                 raise AssertionError("cursor was corrupted")
-            return self.page("items", self.departments[1:])
+            return self.page("items", children[1:])
+        if "/contact/v3/departments/" in path:
+            department_id = path.split("/")[-1]
+            department = next(item for item in self.departments if item["open_department_id"] == department_id)
+            return {"code": 0, "data": {"department": copy.deepcopy(department)}}
         if path.endswith("users/find_by_department"):
             assert query["user_id_type"] == "open_id"
             return self.page("items", self.source_users.get(query["department_id"], []))

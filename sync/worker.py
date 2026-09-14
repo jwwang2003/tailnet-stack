@@ -210,33 +210,54 @@ class Feishu:
         scope = self.scope()
         departments, users, memberships = {}, {}, {}
         roots = self.config["root_department_ids"]
-        for root in roots:
+        for root in sorted(set(roots)):
             if root == "0":
                 departments[root] = {"open_department_id": "0", "name": "Feishu root", "parent_department_id": ""}
             else:
                 department = self.data("departments/" + quote(root, safe=""), {"department_id_type": "open_department_id"}).get("department")
                 if not isinstance(department, dict) or department.get("open_department_id") != root:
                     raise SyncError("configured department is not readable")
-                departments[root] = department
-            for department in self.items("departments/" + quote(root, safe="") + "/children", query={"fetch_child": "true", "department_id_type": "open_department_id", "user_id_type": "open_id"}):
+                departments[root] = dict(department)
+        # A recursive response may omit parent_department_id under the app's
+        # field permissions. Immediate-child responses establish each edge from
+        # the requested parent without asking for any additional permission.
+        parents = {}
+        pending = list(departments)
+        queued = set(pending)
+        for parent in pending:
+            for department in self.items("departments/" + quote(parent, safe="") + "/children", query={"fetch_child": "false", "department_id_type": "open_department_id", "user_id_type": "open_id"}):
                 key = identifier(department.get("open_department_id"), "department ID")
-                if key in departments and departments[key] != department:
+                if key == parent or key == "0":
+                    raise SyncError("cyclic department hierarchy")
+                if "parent_department_id" in department and department["parent_department_id"] != parent:
+                    raise SyncError("department parent conflicts with direct-child response")
+                if key in parents and parents[key] != parent:
+                    raise SyncError("department has conflicting direct parents")
+                normalized = {**department, "parent_department_id": parent}
+                old = departments.get(key, {})
+                if any(old[field] != value for field, value in normalized.items() if field in old):
                     raise SyncError("inconsistent duplicate department")
-                departments[key] = department
-        # Every department must have a resolvable acyclic ancestry within selected roots.
+                departments[key] = {**old, **normalized}
+                parents[key] = parent
+                if key not in queued:
+                    queued.add(key)
+                    pending.append(key)
+        # Only observed direct-child edges extend ancestry. A standalone root's
+        # external parent stays outside the selected scope. Overlapping roots
+        # share all observed ancestors and are enumerated only once.
         ancestors = {}
         for key in departments:
-            path, current = [], key
-            while current:
+            path, current = set(), key
+            while True:
                 if current in path or current not in departments:
                     raise SyncError("cyclic or incomplete department hierarchy")
-                path.append(current)
-                if current in roots:
+                path.add(current)
+                if current not in parents:
+                    if current not in roots:
+                        raise SyncError("incomplete department hierarchy")
                     break
-                current = departments[current].get("parent_department_id")
-                if not isinstance(current, str) or not current:
-                    raise SyncError("missing department parent")
-            ancestors[key] = set(path) - {"0"}
+                current = parents[current]
+            ancestors[key] = path - {"0"}
         for department_id in sorted(departments):
             for user in self.items("users/find_by_department", query={"department_id": department_id, "department_id_type": "open_department_id", "user_id_type": "open_id"}):
                 key = identifier(user.get("open_id"), "user open_id")
