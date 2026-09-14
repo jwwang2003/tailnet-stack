@@ -1,0 +1,41 @@
+{
+  "contract_version": 1,
+  "feishu": {
+    "app_id": "cli_example_only",
+    "tenant_key": "tenant_example_only",
+    "open_id": "ou_example_alice",
+    "user_id": "employee_001",
+    "union_id": "on_example_alice"
+  },
+  "casdoor": {
+    "owner": "employees",
+    "name": "employee_001",
+    "id": "7e1d69b2-42a2-40ea-b485-47ecb24fb70b",
+    "lark": "ou_example_alice",
+    "groups": [
+      "employees/feishu-department-od_engineering",
+      "employees/feishu-group-g_tailnet"
+    ]
+  },
+  "headscale_claims": {
+    "iss": "https://sso.example.invalid",
+    "sub": "7e1d69b2-42a2-40ea-b485-47ecb24fb70b",
+    "aud": ["headscale-example"],
+    "name": "Alice Example",
+    "preferred_username": "employee_001",
+    "email": "alice@example.invalid",
+    "email_verified": false,
+    "groups": [
+      "employees/feishu-department-od_engineering",
+      "employees/feishu-group-g_tailnet"
+    ]
+  },
+  "headplane_claims": {
+    "iss": "https://sso.example.invalid",
+    "sub": "7e1d69b2-42a2-40ea-b485-47ecb24fb70b",
+    "aud": ["headplane-example"],
+    "name": "Alice Example",
+    "preferred_username": "employee_001",
+    "headplane_role": "member"
+  }
+}

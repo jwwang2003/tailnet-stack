@@ -1,0 +1,77 @@
+# Feishu → Casdoor → tailnet identity contract
+
+This is the integration's compatibility contract. Test it against the exact release tuple in `versions.lock.yaml` before admitting production users. The examples are synthetic; they are not captured credentials or tokens.
+
+## Identity and trust boundaries
+
+Use one Feishu **custom enterprise app**, one Casdoor organization, and separate confidential OIDC applications for Headscale and Headplane. Login uses the Casdoor Lark OAuth provider with the Feishu endpoint selected. Directory reads use the **same app ID and secret**. Changing apps is an identity migration, because `open_id` is app-specific.
+
+| Value | Contract |
+| --- | --- |
+| Feishu `open_id` | Required, nonempty binding for both OAuth and directory import. Store in Casdoor `lark`. Never substitute email, department, `user_id`, or `union_id` in this field. |
+| Feishu `user_id`, `union_id` | Optional metadata. Availability depends on permissions. Never merge users solely by these fallback values. |
+| Feishu `tenant_key` | Pin the intended tenant in app configuration and acceptance evidence. App credentials and approved directory scope define the worker's source. A configuration label is not proof that an OAuth login is from that tenant. |
+| Casdoor `owner/name` | Casdoor API record address. Preserve the existing record when linking OAuth and import. |
+| Casdoor `id` | Immutable user identity. It becomes OIDC `sub`; never regenerate it on profile edits, sync, or re-login. |
+| OIDC `iss` | Stable public HTTPS Casdoor origin, matching discovery and token verification. Changing it migrates the Headscale identity. |
+| Headscale provider ID | Derived from issuer and subject. Check repeated login and both clients match the same user. Do not rely on email fallback for Headplane linking. |
+
+The checked Casdoor Lark provider binds `UserInfo.Id` to `open_id`; its native syncer originally stored `user_id` in `lark`. The downstream Casdoor fix must make these agree and reject an empty binding. Do not run the uncorrected native syncer in production. Do not automatically link an existing email to a different Feishu ID.
+
+## Downstream claim contract
+
+| Claim | Required behavior |
+| --- | --- |
+| `iss` | Exact configured issuer. |
+| `sub` | Same nonempty Casdoor user ID for both applications; cannot contain `/`, because Headplane matches the final path component of Headscale's provider ID. |
+| `aud` | Correct client ID for the receiving application. |
+| `exp`, `iat`, `nonce` | Valid OIDC timestamps and the client-supplied nonce. |
+| `name` / `preferred_username` | Display/profile fields; not identity keys. Verify the selected Casdoor token format emits the desired standard names. |
+| `email` | Optional, mutable profile data. Prefer the enterprise email for the displayed directory profile. |
+| `email_verified` | Boolean; set true only with a justified verification policy. Do not fabricate verification to make email-based authorization work. |
+| `groups` | Array of exact qualified Casdoor group IDs such as `employees/feishu-group-g_tailnet`. Keep `useGroupPathInToken=false`, so department moves and display renames do not change authorization strings. Check ID token **and** UserInfo output. |
+| `headplane_role` | Optional single value: `member`, `viewer`, `auditor`, `it_admin`, `network_admin`, `admin`. Default to `member` (no UI access). Never emit `owner`; bootstrap the owner in a controlled first login. |
+
+Use authorization code flow and PKCE S256. Enable standard signing-key validation; do not enable weak RSA compatibility. Disable ordinary users' ability to edit group memberships, the `lark` link, identity IDs, or role claims. Memberships do not map automatically to Headplane role names: any admin role mapping must be separately reviewed.
+
+## Groups and lifecycle ownership
+
+Casdoor group names cannot contain `/`. The slash exists only in the qualified API/token identity (`owner/name`). Store hierarchy in `parentId` and labels in `displayName`.
+
+| Feishu structure | Casdoor name | Owner |
+| --- | --- | --- |
+| Department `od_engineering` | `feishu-department-od_engineering` | Worker; stable name, mutable display name/parent. |
+| Contact user group `g_tailnet` | `feishu-group-g_tailnet` | Worker; virtual group. |
+| Local Casdoor group | Any name outside the two reserved prefixes | Operator; worker preserves it. |
+| Users and profile fields | Existing account linked by `lark == open_id` | Corrected native Casdoor syncer. Worker does not create users. |
+| Feishu memberships | User `groups` entries under the reserved prefixes | Worker. Native syncer must preserve them. |
+| Source inactive or confirmed missing users | `isForbidden` plus worker marker in `properties` | Worker/native coordination; operator hold always wins. |
+
+Department memberships include ancestors within the configured roots. Contact user groups are explicitly selected by stable group ID; they are distinct from Feishu chat groups. Chat membership, roles, custom attributes, and other structures require separate adapters and are not silently treated as authorization groups. The initial adapter reads user members of Contact groups; a group with department members must be rejected until its expansion semantics are implemented and tested.
+
+Read all pages of all configured departments and groups before planning writes. Reject errors, permission failures, repeated cursors, missing identifiers, inconsistent duplicate records, and a changed permission-scope snapshot. A partial run must not remove memberships, disable users, or advance the missing-user counter. A missing user is marked on one complete applied run and blocked only after a second complete applied run. Explicit inactive status can block after a complete read. Retain accounts and groups; do not delete them automatically.
+
+Store the worker's source binding and permission-scope fingerprint in durable state. A changed app, organization, root/group selection, or permissions requires an operator-reviewed rebaseline; a valid but narrower API scope is not evidence of employee departure. Dry runs do not change Casdoor or state.
+
+Blocking Casdoor prevents new authentication. It does **not** revoke existing Headscale nodes or Headplane sessions. Offboarding must also expire/delete the employee's nodes and revoke their UI sessions using the operator procedure. OIDC admission `allowed_groups` does **not** create Headscale ACL policy groups.
+
+## Feishu app permissions and acceptance gates
+
+App developers can implement this without using Feishu enterprise SAML administration. Reading organization data still requires the app's Contact permissions and authorized directory range; creating an app does not grant organization-wide access. Have the app publisher/appropriate approver grant only the intended employee population and required user, department, scope, and Contact-group read access. Verify actual returned `open_id`, status fields, enterprise email, and group member types before enabling writes.
+
+Keep both Casdoor applications unavailable to ordinary employees until these checks pass:
+
+1. Sync-before-login and login-before-sync result in one Casdoor record, one immutable `id`, and one matching `lark` link.
+2. Changed email/name, absent `user_id`, and duplicate email with a different `open_id` preserve identity isolation.
+3. Both application tokens pass OIDC validation and have the same `sub`, correct different audiences, stable qualified groups, and no accidental admin role.
+4. Nested/multiple department membership, department rename/move, Contact group changes, and interrupted pagination converge on repeated sync.
+5. Reduced permission scope produces an error with zero mutations; a genuinely absent user blocks only after two completed applied snapshots.
+6. Disabled, re-enabled, and manually held users follow the documented ownership policy. Existing tailnet/session revocation is exercised separately.
+
+Run local fixture checks with `python3 -m unittest discover -s tests/worker -v`. These are contract checks, not proof of a real Feishu tenant login; live gates require an app, approved permissions, TLS/DNS, and credentials supplied at deployment.
+
+## Primary references
+
+- [Casdoor Lark syncer documentation](https://casdoor.ai/docs/syncer/Lark/) describes native import; verify its claims against the pinned source.
+- [Casdoor Lark provider source](https://github.com/casdoor/casdoor/blob/master/idp/lark.go), [syncer source](https://github.com/casdoor/casdoor/blob/master/object/syncer_lark.go), [JWT generation](https://github.com/casdoor/casdoor/blob/master/object/token_jwt.go), and [group API implementation](https://github.com/casdoor/casdoor/blob/master/object/group.go).
+- [Feishu tenant access token](https://open.feishu.cn/document/server-docs/authentication-management/access-token/tenant_access_token_internal), [Contact scope](https://open.feishu.cn/document/server-docs/contact-v3/scope/list), [departments](https://open.feishu.cn/document/server-docs/contact-v3/department/children), and [Contact group membership](https://open.feishu.cn/document/server-docs/contact-v3/group-member/simplelist).
