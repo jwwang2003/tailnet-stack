@@ -39,7 +39,7 @@ class FixtureApi:
         self.fail_path = None
         self.native_enabled = False
         self.native_read_only = True
-        self.native_columns = [{"name": "Lark", "casdoorName": "Lark", "isKey": True, "isHashed": False}, {"name": "DisplayName", "casdoorName": "DisplayName"}]
+        self.native_columns = [{"name": "Lark", "casdoorName": "Lark", "isKey": True, "isHashed": False}, {"name": "DisplayName", "casdoorName": "DisplayName", "isHashed": True}]
         self.native_app_id = "cli_REPLACE_ME"
         self.before_update = None
 
@@ -302,6 +302,12 @@ class WorkerLifecycleTests(unittest.TestCase):
     def test_native_read_only_required_before_import(self):
         self.api.native_read_only = False
         with self.assertRaisesRegex(w.SyncError, "isReadOnly=true"):
+            self.run_worker()
+        self.assertEqual(self.api.writes, [])
+
+    def test_native_profile_hash_required_for_change_detection(self):
+        self.api.native_columns[1].pop("isHashed")
+        with self.assertRaisesRegex(w.SyncError, "isHashed=true"):
             self.run_worker()
         self.assertEqual(self.api.writes, [])
 

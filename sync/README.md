@@ -19,10 +19,10 @@ Configure Casdoor's native Lark syncer with `isEnabled: false`, `isReadOnly: tru
 ```json
 [
   {"name": "Lark", "casdoorName": "Lark", "isKey": true, "isHashed": false},
-  {"name": "DisplayName", "casdoorName": "DisplayName"},
-  {"name": "Email", "casdoorName": "Email"},
-  {"name": "Avatar", "casdoorName": "Avatar"},
-  {"name": "Title", "casdoorName": "Title"}
+  {"name": "DisplayName", "casdoorName": "DisplayName", "isHashed": true},
+  {"name": "Email", "casdoorName": "Email", "isHashed": true},
+  {"name": "Avatar", "casdoorName": "Avatar", "isHashed": true},
+  {"name": "Title", "casdoorName": "Title", "isHashed": true}
 ]
 ```
 

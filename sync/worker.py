@@ -330,6 +330,8 @@ class Casdoor:
                 raise SyncError("native syncer tableColumns overlap worker or immutable identity fields")
             if name == "Lark" and column.get("isHashed") is not False:
                 raise SyncError("native Lark key must have isHashed=false")
+            if name != "Lark" and column.get("isHashed") is not True:
+                raise SyncError("native profile columns must set isHashed=true")
             if not name or column.get("name") != name:
                 raise SyncError("native syncer tableColumns must use matching Casdoor-cased name and casdoorName")
 
