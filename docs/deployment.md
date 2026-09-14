@@ -68,7 +68,19 @@ Headscale requires working Casdoor OIDC discovery at startup. On host reboot, it
 
 Verify the key file contains only the generated key (not log output); it is a server-side administrative credential. Rotate it before expiry and recreate Headplane after rotation. Its browser API-key login is disabled.
 
-Start the sync worker only after its credentials and configuration are in place and its dry run succeeds. The first Headplane OIDC login becomes owner: restrict access during bootstrap and perform it with the intended operator before admitting other users. Keep employee defaults as `member`, not `admin` or `viewer`.
+Prepare the worker using its [configuration and native-import contract](../sync/README.md):
+
+```sh
+cp sync/config.example.json .runtime/sync/sync.json
+# Edit IDs, organization, native syncer and admission/role mapping.
+# Place feishu_app_secret and casdoor_sync_client_secret in .runtime/secrets,
+# mode 600. Do not paste secrets into shell command arguments/history.
+stack --profile sync run --rm worker --config /config/sync.json
+stack --profile sync run --rm worker --config /config/sync.json --apply
+stack --profile sync up -d worker
+```
+
+Start the schedule only after the dry run and first applied snapshot pass. The first Headplane OIDC login becomes owner: restrict access during bootstrap and perform it with the intended operator before admitting other users. Keep employee defaults as `member`, not `admin` or `viewer`.
 
 The initial network policy denies all traffic. Add narrowly scoped reviewed ACL rules to `.runtime/headscale/policy.json` before the pilot and restart Headscale to load them. OIDC groups control enrollment; they do not populate live ACL groups. File policy is the single source of truth. A future automatic policy generator must merge against a separate operator-maintained input and pass policy tests before applying.
 

@@ -25,4 +25,6 @@ docker build --target final \
 docker build --target STANDARD \
   --label "org.opencontainers.image.revision=$casdoor_commit" \
   --tag "$casdoor_image" "$workspace/casdoor"
+docker build --file "$integration_root/build/sync.Dockerfile" \
+  --tag "${WORKER_IMAGE:-feishu/sync:2026.09-rc.1}" "$integration_root"
 echo 'Local candidate images built. Record registry digests and test the complete tuple before production.'

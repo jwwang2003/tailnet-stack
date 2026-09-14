@@ -27,22 +27,26 @@ to Headscale do not automatically become Headscale network ACL groups.
 - Feishu directory synchronization and deployment files live here, so upstream
   updates do not overwrite them.
 
-## Layout
+## Getting started
 
-| Path | Purpose |
-| --- | --- |
-| `deploy/headscale/` | Headscale configuration and network policy templates |
-| `deploy/headplane/` | Headplane configuration templates |
-| `deploy/casdoor/` | Casdoor bootstrap/configuration templates |
-| `deploy/reverse-proxy/` | HTTPS routing configuration |
-| `deploy/sync/` | Synchronization runtime configuration |
-| `sync/` | Directory reconciliation worker |
-| `docs/` | Build/release, operator, and employee instructions |
-| `releases/` | Non-secret release manifest examples and release records |
+1. Read [build and versioning](docs/build-versioning.md) and verify `versions.lock.yaml`.
+2. Follow the [deployment runbook](docs/deployment.md) to render private configuration and bootstrap Casdoor.
+3. Configure the [Feishu worker](sync/README.md) and validate the [identity contract](docs/identity-contract.md).
+4. Run the [acceptance checklist](docs/acceptance-checklist.md) before production promotion.
+5. Give employees the [handbook](docs/employee-handbook.md), with your real URLs and tested client versions.
 
-Read [build and versioning](docs/build-versioning.md) before changing source refs,
-and [deployment boundaries](deploy/README.md) before preparing a host. Runtime
-secrets, databases, and backup files are excluded from Git.
+[Operations](docs/operations.md) covers backup/restore, offboarding, incidents, and upgrades.
+`deploy/compose.yaml` and `deploy/Caddyfile` provide the stack; `scripts/configure.py`
+renders secrets and per-service settings into ignored `.runtime/`. The worker is
+in `sync/`; build recipes are in `build/`; immutable release evidence belongs in `releases/`.
+
+Local checks:
+
+```sh
+python3 -m pip install -r requirements-build.txt
+bash scripts/test.sh
+python3 scripts/release.py verify-sources ..
+```
 
 The lock starts as a development baseline. Release promotion requires real Feishu
 OAuth, directory permissions and identity linking, downstream OIDC acceptance,
