@@ -64,7 +64,9 @@ host. Do not set `compatibility_verified: true` while these checks are pending.
 - [ ] Blocking a test employee through the directory is observed to expire that
       employee's Headscale nodes and preauth keys automatically, with the counts
       in the report's `revocation` block; a forced Headscale outage leaves the
-      subject in `pending_revocations` and is retried on the next run.
+      subject in the revocation journal (`sync-state.json.revocations.json`) and
+      the marker-less blocked account is retried on the next run, including
+      after a partial run and after a failed `--offboard --apply`.
 - [ ] `--offboard --apply` on a test employee blocks the account, sets the hold,
       removes managed groups, and revokes nodes immediately; affected API keys,
       routes, and administrative access are reviewed manually. Test the

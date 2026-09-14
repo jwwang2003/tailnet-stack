@@ -51,6 +51,17 @@ class FixtureApi:
         self.headscale_nodes = []
         self.headscale_keys = []
         self.headscale_calls = []
+        # Failure injection for revocation durability tests (test_revocation_durability.py).
+        # Members are update-user targets: either the API id "owner/name" or the Casdoor
+        # subject id. fail_update_user_for raises before the write is applied (Casdoor
+        # rejected it); fail_after_update_user_for applies the write and then raises, the
+        # shape of a lost/ambiguous response after the server committed.
+        self.fail_update_user_for = set()
+        self.fail_after_update_user_for = set()
+        # Headscale path fragments (under /api/v1/) that raise SyncError, independent of fail_path.
+        self.headscale_fail_paths = set()
+        # Optional callable(method, path, query, body) observed before every request is served.
+        self.on_request = None
 
     def page(self, key, items, more=False, cursor=""):
         return {"code": 0, "data": {key: copy.deepcopy(items), "has_more": more, "page_token": cursor}}
@@ -58,6 +69,8 @@ class FixtureApi:
     def request(self, method, base, path, query=None, body=None, headers=None, retry=True):
         query = query or {}
         self.calls.append((method, path, copy.deepcopy(query)))
+        if self.on_request:
+            self.on_request(method, path, query, body)
         if self.fail_path and self.fail_path in path:
             raise w.SyncError("fixture permission failure")
         if path == "/open-apis/application/v6/scopes":
@@ -123,6 +136,8 @@ class FixtureApi:
             old.update(copy.deepcopy(body))
             result = "Affected"
         elif action == "update-user":
+            if self.update_user_targeted(query["id"], self.fail_update_user_for):
+                raise w.SyncError("fixture update-user failure before the write")
             self.writes.append(action)
             old = next(item for item in self.users if item["owner"] + "/" + item["name"] == query["id"])
             assert set(query["columns"].split(",")) == set(body)
@@ -133,15 +148,24 @@ class FixtureApi:
             old.update(copy.deepcopy(body))
             if "properties" in body:
                 old["properties"] = properties
+            if self.update_user_targeted(query["id"], self.fail_after_update_user_for):
+                raise w.SyncError("fixture update-user response lost after the write")
             result = "Affected"
         else:
             raise AssertionError((method, path, query))
         return {"status": "ok", "data": result}
 
 
+    def update_user_targeted(self, target, ids):
+        """True when an injected update-user failure names this API id or its Casdoor subject."""
+        user = next((item for item in self.users if item["owner"] + "/" + item["name"] == target), None)
+        return target in ids or (user is not None and user.get("id") in ids)
+
     def headscale(self, method, path, query, body, headers):
         assert headers.get("Authorization") == "Bearer synthetic-headscale-key"
         self.headscale_calls.append((method, path, copy.deepcopy(query), copy.deepcopy(body)))
+        if any(fragment in path for fragment in self.headscale_fail_paths):
+            raise w.SyncError("fixture Headscale failure on " + path)
         if path == "/api/v1/user" and method == "GET":
             return {"users": copy.deepcopy(self.headscale_users)}
         if path == "/api/v1/node" and method == "GET":

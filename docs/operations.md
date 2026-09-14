@@ -179,11 +179,17 @@ covers the common path when its `headscale` section is configured: a full applie
 run that blocks a Casdoor account (inactive Feishu status, or a user confirmed
 missing for `missing_confirmations` runs) also expires, or deletes per
 `on_block`, every Headscale node registered by that OIDC subject and expires the
-subject's preauth keys; the report shows the counts under `revocation`. If
-Headscale is unreachable, the block stays applied, the subject is kept in the
-state file's `pending_revocations`, the run ends with an error, and the
-revocation is retried every interval, including staged runs, until it succeeds.
-Do not clear that state by hand.
+subject's preauth keys; the report shows the counts under `revocation`. The
+subject is recorded in the journal `sync-state.json.revocations.json` before the
+block is sent, and the Casdoor user receives `properties.feishu_sync_revoked`
+once Headscale has confirmed. If Headscale is unreachable, or the run fails or
+crashes after the block, the block stays applied, the journal entry is kept, the
+run ends with an error, and the revocation is retried every interval, including
+staged runs, until it succeeds; every applied run also revokes any linked user
+that is forbidden with a worker marker but no revoked marker, and a new block
+clears a stale revoked marker left by an earlier offboarding. Do not edit the
+journal by hand; a corrupt journal stops synchronization until it is restored
+from backup.
 
 For immediate containment, before the directory change reaches the worker:
 
@@ -192,11 +198,17 @@ For immediate containment, before the directory change reaches the worker:
 "${dc[@]}" run --rm worker --config /config/sync.json --offboard employees/EMPLOYEE_NAME --apply
 ```
 
-The dry run lists the Casdoor changes. `--apply` blocks the account, sets
-`properties.feishu_sync_hold: "true"` so no later run re-enables it, sets
+The dry run lists the Casdoor changes. `--apply` first takes the worker's state
+lock, waiting up to `lock_wait_seconds` (default 300) for a running interval to
+finish, then records the subject in the revocation journal, blocks the account,
+sets `properties.feishu_sync_hold: "true"` so no later run re-enables it, sets
 `headplane_role` to `member`, removes the admission alias and `feishu-*` groups
 while keeping local groups, and, when `headscale` is configured, expires the
-employee's nodes and preauth keys at once. Clear the hold only after the review
+employee's nodes and preauth keys at once and marks the user
+`feishu_sync_revoked`. If the command fails after the block because Headscale is
+unreachable, the journal entry remains and the next scheduled applied run
+completes the revocation; confirm it in that run's `revocation` counters, or
+revoke manually below if it cannot wait. Clear the hold only after the review
 that would justify re-enabling.
 
 Then complete and verify manually; these steps are also the full procedure when

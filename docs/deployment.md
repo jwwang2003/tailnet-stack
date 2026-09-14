@@ -6,7 +6,7 @@ For a deployment without Feishu, start with the [Integrated Tailnet deployment g
 
 This guide takes a **new Ubuntu 24.04 x86-64 server** from an empty installation to a pilot with Feishu login, Casdoor user synchronization, Headscale device enrollment, and Headplane administration. Run server commands as the same non-root deployment user throughout. Steps explicitly marked **laptop** or **browser** run elsewhere.
 
-This is the `2026.09-rc.2` candidate deployment. The sandbox populated 207 Casdoor accounts, passed the authorization probe and an isolated restore rehearsal, and produced a validated six-image bundle. Production remains blocked by two reproduced revocation retry failures, missing Feishu scopes, and the public DNS/TLS and device pilot. Start with the [release review and deployment sequence](production-readiness.md); the steps below prepare a staging site. Keep the pinned patched images.
+This is the `2026.09-rc.3` candidate deployment. The sandbox populated 207 Casdoor accounts, passed the authorization probe and an isolated restore rehearsal, and produced a validated six-image bundle. Production remains blocked by two reproduced revocation retry failures, missing Feishu scopes, and the public DNS/TLS and device pilot. Start with the [release review and deployment sequence](production-readiness.md); the steps below prepare a staging site. Keep the pinned patched images.
 
 ## 1. Fill in your deployment worksheet
 
@@ -69,7 +69,7 @@ If the laptop does not have the repository, download the helper using your local
 
 ```sh
 curl --fail --location --proxy http://127.0.0.1:7890 \
-  https://raw.githubusercontent.com/jwwang2003/tailscale-feishu-integration/release/integrated-2026.09-rc.2/scripts/remote-proxy-shell.sh \
+  https://raw.githubusercontent.com/jwwang2003/tailscale-feishu-integration/release/integrated-2026.09-rc.3/scripts/remote-proxy-shell.sh \
   -o remote-proxy-shell.sh
 less remote-proxy-shell.sh
 bash remote-proxy-shell.sh wjw@YOUR_SERVER_IP
@@ -101,7 +101,7 @@ SSH aliases and identity/jump-host settings from `~/.ssh/config` work. The scrip
 printf 'Proxy: %s\n' "$https_proxy"
 ss -ltn '( sport = :17890 )'
 curl --head --fail --max-time 20 https://github.com
-git ls-remote https://github.com/jwwang2003/tailscale-feishu-integration.git refs/heads/release/integrated-2026.09-rc.2
+git ls-remote https://github.com/jwwang2003/tailscale-feishu-integration.git refs/heads/release/integrated-2026.09-rc.3
 ```
 
 Expected: proxy URL `http://127.0.0.1:17890`, a loopback listener, an HTTPS response, and a Git commit/ref. Adjust the `ss` port if you selected another port. If forwarding fails, confirm the local proxy is running, the remote port is unused, and SSH server policy permits remote TCP forwarding. Keep `GatewayPorts` disabled or `clientspecified`; do not force wildcard listeners. No cloud firewall opening for port 17890 is needed.
@@ -166,10 +166,10 @@ For a **new server checkout**:
 ```sh
 mkdir -p "$HOME/tailscale-open"
 cd "$HOME/tailscale-open"
-git clone --branch release/integrated-2026.09-rc.2 https://github.com/jwwang2003/headscale.git
-git clone --branch release/integrated-2026.09-rc.2 https://github.com/jwwang2003/headplane.git
-git clone --branch release/integrated-2026.09-rc.2 https://github.com/jwwang2003/casdoor.git
-git clone --branch release/integrated-2026.09-rc.2 https://github.com/jwwang2003/tailscale-feishu-integration.git
+git clone --branch release/integrated-2026.09-rc.3 https://github.com/jwwang2003/headscale.git
+git clone --branch release/integrated-2026.09-rc.3 https://github.com/jwwang2003/headplane.git
+git clone --branch release/integrated-2026.09-rc.3 https://github.com/jwwang2003/casdoor.git
+git clone --branch release/integrated-2026.09-rc.3 https://github.com/jwwang2003/tailscale-feishu-integration.git
 cd tailscale-feishu-integration
 python3 -m venv .venv
 . .venv/bin/activate
@@ -254,10 +254,10 @@ If registry access requires your Windows proxy, complete [the Docker tunnel setu
 
 ```sh
 bash scripts/build-products.sh ..
-docker image inspect tailnet/headscale:2026.09-rc.2 --format '{{.Id}}'
-docker image inspect tailnet/headplane:2026.09-rc.2 --format '{{.Id}}'
-docker image inspect tailnet/casdoor:2026.09-rc.2 --format '{{.Id}}'
-docker image inspect tailnet/sync:2026.09-rc.2 --format '{{.Id}}'
+docker image inspect tailnet/headscale:2026.09-rc.3 --format '{{.Id}}'
+docker image inspect tailnet/headplane:2026.09-rc.3 --format '{{.Id}}'
+docker image inspect tailnet/casdoor:2026.09-rc.3 --format '{{.Id}}'
+docker image inspect tailnet/sync:2026.09-rc.3 --format '{{.Id}}'
 ```
 
 Each inspect command should print an image ID. The script checks clean, matching source commits before building. Go, Node, and frontend build tools run inside the builders; a host Go installation is not required for this image path.
@@ -801,7 +801,7 @@ Exercise a fresh-project restore with [the operations runbook](operations.md) be
 | Headplane invalid API key | Key file/expiry and server URL | Generate/rotate a valid server key and recreate Headplane |
 | Employee cannot open Headplane | Expected role | `member` has no UI; verify only authorized operator mappings |
 | Connected but resource unreachable | Policy, resource port, route, DNS | Start with one explicit IP/port test and inspect Headscale logs |
-| Error `Headscale revocation is pending` | Report `revocation.pending`, state `pending_revocations`, `headscale.base_url`, API key file and expiry | The Casdoor block is already applied. Restore Headscale reachability or rotate the API key and restart the worker; the revocation is retried every interval. Revoke manually per the offboarding runbook if it cannot wait |
+| Error `Headscale revocation is pending` | Report `revocation.pending`, journal `sync-state.json.revocations.json`, blocked users without `feishu_sync_revoked`, `headscale.base_url`, API key file and expiry | The Casdoor block is already applied. Restore Headscale reachability or rotate the API key and restart the worker; the revocation is retried every interval. Revoke manually per the offboarding runbook if it cannot wait |
 | Login says the account does not exist and is not allowed to sign up | Employee's `lark` binding in Casdoor, latest worker report, Feishu data scope | Expected for an employee not yet imported: hardened applications refuse fallback binding by email/phone/name. Wait for the next interval or run `--apply` once, and confirm the employee is inside the app's Contact data scope. Never bind manually by email |
 | Role/account change did not cut an existing VPN connection | Worker `headscale` section, `revocation` in the report, existing nodes/preauth keys | With `headscale` configured, a block expires nodes and preauth keys automatically; otherwise revoke per the offboarding runbook. A role change alone never expires nodes; Headplane sessions expire through the cookie max age |
 

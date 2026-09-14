@@ -30,7 +30,9 @@ class SyncError(Exception):
 PREFIXES = ("feishu-department-", "feishu-group-")
 FORBIDDEN_MARKER = "feishu_sync_forbidden"
 HOLD_MARKER = "feishu_sync_hold"
+REVOKED_MARKER = "feishu_sync_revoked"
 OWNER_MARKER = "feishu_sync_owner"
+JOURNAL_SOURCES = ("sync", "offboard")
 WORKER_OWNER = "tailscale-feishu-integration/v1"
 ROLE_PRIORITY = ("admin", "network_admin", "it_admin", "auditor", "viewer", "member")
 LIFECYCLE_MODES = ("strict", "staged")
@@ -59,7 +61,7 @@ DESCRIPTIVE_FEATURES = ("employee_no", "job_title", "email", "mobile")
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from employee_profile import (ProfileError, normalize_profile, merge_profiles,
                               profile_property_delta, profile_coverage)
-from tailnet import Tailnet, TailnetError, validate_headscale_config, revoke_subjects
+from tailnet import Tailnet, TailnetError, validate_headscale_config
 
 
 def digest(value):
@@ -128,7 +130,7 @@ def load_config(path):
             raise SyncError("headplane_role_groups must map selected Contact group IDs to valid roles")
         if not cs["native_syncer_id"] or cs["native_syncer_id"].count("/") != 1:
             raise SyncError("native_syncer_id must be owner/name")
-        for field, default, minimum, maximum in (("interval_seconds", 300, 30, 86400), ("missing_confirmations", 2, 2, 100), ("http_timeout_seconds", 30, 1, 120), ("http_attempts", 3, 1, 5)):
+        for field, default, minimum, maximum in (("interval_seconds", 300, 30, 86400), ("missing_confirmations", 2, 2, 100), ("http_timeout_seconds", 30, 1, 120), ("http_attempts", 3, 1, 5), ("lock_wait_seconds", 300, 1, 3600)):
             value = config.setdefault(field, default)
             if type(value) is not int or not minimum <= value <= maximum:
                 raise SyncError(f"invalid {field}")
@@ -626,7 +628,14 @@ def plan(config, snapshot, users, groups, state):
             # An omitted key is preserved by Go's JSON decoder, so clear the
             # marker with an explicit falsey value instead of omitting it.
             properties[FORBIDDEN_MARKER] = ""
+            if properties.get(REVOKED_MARKER):
+                properties[REVOKED_MARKER] = ""
             next_forbidden = False
+        if next_forbidden and not current_forbidden and properties.get(REVOKED_MARKER):
+            # A manual re-enable leaves the previous cycle's revoked marker behind; a new
+            # block clears it in the same write so the marker-based retry still sees this
+            # block if the journal entry is ever lost (e.g. restored from an older backup).
+            properties[REVOKED_MARKER] = ""
         target_groups = {item for item in current_groups if not managed(item)}
         target_role = "member"
         if source is not None and not next_forbidden:
@@ -692,6 +701,164 @@ def save_state(path, state):
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
+
+
+def journal_path(config):
+    return config["state_file"] + ".revocations.json"
+
+
+def check_journal(journal):
+    """Validate the revocation journal; corrupt retry state must stop the worker, never be skipped."""
+    valid = isinstance(journal, dict) and journal.get("version") == 1 and isinstance(journal.get("pending"), dict)
+    for subject, entry in (journal["pending"].items() if valid else ()):
+        if (not isinstance(subject, str) or not subject or "/" in subject or len(subject) > 200 or not isinstance(entry, dict)
+                or type(entry.get("since")) is not int or entry["since"] < 0 or entry.get("source") not in JOURNAL_SOURCES):
+            valid = False
+            break
+    if not valid:
+        raise SyncError("revocation journal schema is invalid; restore it before applying")
+    return journal
+
+
+def load_journal(config):
+    """Read the durable revocation journal; a missing file is an empty journal."""
+    try:
+        data = json.loads(Path(journal_path(config)).read_text())
+    except FileNotFoundError:
+        return {"version": 1, "pending": {}}
+    except (OSError, ValueError):
+        raise SyncError("revocation journal is unreadable; restore it before applying") from None
+    return check_journal(data)
+
+
+def save_journal(config, journal):
+    save_state(journal_path(config), check_journal(journal))
+
+
+def journal_subject(config, journal, subject, source):
+    """Persist the intent to revoke before the block is sent; a failure, crash or lost response after that cannot lose it."""
+    if subject not in journal["pending"]:
+        journal["pending"][subject] = {"since": int(time.time()), "source": source}
+        save_journal(config, journal)
+
+
+def migrate_legacy_revocations(state, journal):
+    """Carry rc.2 state["pending_revocations"] into the journal; the key is written back empty afterwards."""
+    legacy = state.get("pending_revocations", [])
+    if not isinstance(legacy, list) or any(not isinstance(item, str) for item in legacy):
+        raise SyncError("worker state pending_revocations is invalid")
+    added = False
+    for subject in legacy:
+        if subject not in journal["pending"]:
+            journal["pending"][subject] = {"since": int(time.time()), "source": "sync"}
+            added = True
+    return added
+
+
+def state_lock(config, wait_seconds=0, suffix=".lock"):
+    """Take the exclusive advisory lock beside the state file, polling for at most wait_seconds."""
+    try:
+        path = Path(config["state_file"] + suffix)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handle = path.open("a")
+    except OSError:
+        raise SyncError("cannot open the state lock file") from None
+    deadline = time.monotonic() + wait_seconds
+    while True:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return handle
+        except BlockingIOError:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                handle.close()
+                if wait_seconds:
+                    raise SyncError("timed out after %d seconds waiting for the state lock held by another worker" % wait_seconds) from None
+                raise SyncError("another worker holds the state lock") from None
+            time.sleep(min(0.5, remaining))
+
+
+def revocation_targets(users, journal):
+    """Subjects whose Headscale access must be revoked, and journal entries whose block never applied.
+
+    Targets are the journaled subjects plus every linked user kept forbidden by
+    the worker marker or an operator hold that carries no revoked marker. A user
+    forbidden without either marker is an administrator block and is left alone.
+    """
+    by_id = {user["id"]: user for user in users if isinstance(user.get("id"), str)}
+    targets, dropped = set(), []
+    for subject in journal["pending"]:
+        user = by_id.get(subject)
+        if user is not None and user.get("isForbidden") is not True:
+            dropped.append(subject)
+        else:
+            # A subject whose Casdoor account vanished is still revoked; there is no employee to protect.
+            targets.add(subject)
+    for subject, user in by_id.items():
+        properties = user.get("properties") or {}
+        worker_block = bool(properties.get(FORBIDDEN_MARKER)) or properties.get(HOLD_MARKER) == "true"
+        if user.get("lark") and user.get("isForbidden") is True and worker_block and not properties.get(REVOKED_MARKER):
+            targets.add(subject)
+    return sorted(targets), dropped
+
+
+def mark_revoked(casdoor, user):
+    """Record a completed Headscale revocation on the Casdoor user after the same identity check as every owned write."""
+    api_id = str(user.get("owner")) + "/" + str(user.get("name"))
+    latest = casdoor.call("get-user", {"id": api_id})
+    if not isinstance(latest, dict) or latest.get("id") != user["id"] or latest.get("lark") != user.get("lark"):
+        raise SyncError("Casdoor identity changed before the revocation marker could be recorded")
+    casdoor.call("update-user", {"id": api_id, "columns": "properties"}, {"properties": {REVOKED_MARKER: str(int(time.time()))}}, mutate=True)
+
+
+def apply_revocations(config, http, casdoor, users, journal, targets):
+    """Revoke each target's Headscale access; a success records the marker and clears the journal entry."""
+    counters = {"revoked": 0, "headscale_users": 0, "nodes_expired": 0, "nodes_deleted": 0, "preauth_keys_expired": 0}
+    try:
+        tailnet = Tailnet(config["headscale"], http)
+    except TailnetError as error:
+        return counters, [str(error)]
+    by_id = {user["id"]: user for user in users if isinstance(user.get("id"), str)}
+    failures = []
+    for subject in targets:
+        try:
+            result = tailnet.revoke(subject)
+            if subject in by_id:
+                mark_revoked(casdoor, by_id[subject])
+        except (SyncError, TailnetError) as error:
+            # Transport, API or malformed responses: the subject stays pending and is retried next run.
+            failures.append(str(error))
+            continue
+        counters["revoked"] += 1
+        for key, value in result.items():
+            counters[key] += value
+        if subject in journal["pending"]:
+            del journal["pending"][subject]
+            save_journal(config, journal)
+    return counters, failures
+
+
+def revocation_report(config, targets, counters=None):
+    counters = counters or {"revoked": 0, "headscale_users": 0, "nodes_expired": 0, "nodes_deleted": 0, "preauth_keys_expired": 0}
+    return {"configured": bool(config.get("headscale")), "targets": len(targets), "pending": len(targets) - counters["revoked"], **counters}
+
+
+def reconcile_revocations(config, http, casdoor, users, journal):
+    """Applied runs: drop journal entries whose block never applied, revoke the rest, report counters and failures."""
+    targets, dropped = revocation_targets(users, journal)
+    for subject in dropped:
+        del journal["pending"][subject]
+    if dropped:
+        save_journal(config, journal)
+    counters, failures = None, []
+    if targets and config.get("headscale"):
+        counters, failures = apply_revocations(config, http, casdoor, users, journal, targets)
+    return revocation_report(config, targets, counters), failures
+
+
+def pending_revocation_error(revocation, failures):
+    detail = ("; last error: " + failures[-1]) if failures else ""
+    return SyncError("Casdoor blocks are applied but Headscale revocation is pending for %d subject(s); it is retried on the next run%s" % (revocation["pending"], detail))
 
 
 def write_heartbeat(config, report):
@@ -804,15 +971,19 @@ def status_gap(config, feishu, snapshot):
             "permissions_checked": permissions["checked"]}
 
 
-def staged_run(config, feishu, snapshot, state, gap, apply=False, http=None):
+def staged_run(config, feishu, snapshot, state, gap, apply=False, http=None, journal=None):
     """Populate Casdoor users and descriptive profiles while lifecycle status is unavailable.
 
     No group, role, forbidden-state or missing-counter changes happen here; the
     next run upgrades itself to full lifecycle synchronization automatically
-    once every source user carries a complete status object.
+    once every source user carries a complete status object. Pending Headscale
+    revocations are still completed, so a staged period cannot delay them.
     """
     load_employee_catalogs(feishu, snapshot, config)
     check_state(config, snapshot, state)
+    if journal is None:
+        journal = load_journal(config)
+    migrated = migrate_legacy_revocations(state, journal)
     casdoor = Casdoor(config["casdoor"], http)
     native_columns = casdoor.verify_native(config["feishu"])
     users, _ = casdoor.snapshot()
@@ -823,13 +994,17 @@ def staged_run(config, feishu, snapshot, state, gap, apply=False, http=None):
     operations, matched = ([], len({user.get("lark") for user in users} & set(snapshot["users"])))
     if config.get("employee_profile", {}).get("enabled"):
         operations, matched = profile_operations(config, snapshot, users)
-    revocation = {"configured": bool(config.get("headscale")), "pending": len(state.get("pending_revocations", []))}
     if apply:
         apply_profile_operations(casdoor, operations)
-        if state and state.get("pending_revocations") and config.get("headscale"):
-            retried, pending = revoke_subjects(Tailnet(config["headscale"], http), state["pending_revocations"], (SyncError, TailnetError))
-            revocation.update(retried, pending=len(pending))
-            save_state(config["state_file"], {**state, "pending_revocations": pending})
+        if migrated:
+            save_journal(config, journal)
+            save_state(config["state_file"], {**state, "pending_revocations": []})
+        # Profile writes verified owned-property digests above; the marker writes come after them.
+        revocation, failures = reconcile_revocations(config, http, casdoor, users, journal)
+        if revocation["configured"] and revocation["pending"]:
+            raise pending_revocation_error(revocation, failures)
+    else:
+        revocation = revocation_report(config, revocation_targets(users, journal)[0])
     return {"status": "ok", "mode": "apply-staged" if apply else "dry-run-staged", "lifecycle": "skipped",
             "lifecycle_reason": "user status unavailable; admission, roles and offboarding are not synchronized", **gap,
             "source_users": len(snapshot["users"]), "unlinked_source_users": len(set(snapshot["users"]) - {user.get("lark") for user in users}),
@@ -858,6 +1033,7 @@ def audit_directory(config, http=None):
 def run(config, apply=False, http=None):
     http = http or Http(config["http_timeout_seconds"], config["http_attempts"])
     state = load_state(config["state_file"])
+    journal = load_journal(config)
     feishu = Feishu(config["feishu"], http)
     # Read the complete directory first; decide afterwards whether lifecycle
     # synchronization is permitted by the observed status coverage.
@@ -867,10 +1043,11 @@ def run(config, apply=False, http=None):
         if config["lifecycle_mode"] != "staged":
             raise SyncError("user status is incomplete for %d users; grant %s (%s) or set lifecycle_mode to staged"
                             % (gap["users_without_status"], ", ".join(gap["missing_scopes"]), gap["grant_url"]))
-        return staged_run(config, feishu, snapshot, state, gap, apply, http)
+        return staged_run(config, feishu, snapshot, state, gap, apply, http, journal)
     snapshot["audit_only"] = False
     load_employee_catalogs(feishu, snapshot, config)
     check_state(config, snapshot, state)
+    migrated = migrate_legacy_revocations(state, journal)
     casdoor = Casdoor(config["casdoor"], http)
     native_columns = casdoor.verify_native(config["feishu"])
     users, groups = casdoor.snapshot()
@@ -883,9 +1060,10 @@ def run(config, apply=False, http=None):
         casdoor.import_profiles()
         users, groups = casdoor.snapshot()
     operations, next_state, report = plan(config, snapshot, users, groups, state)
-    revocation = {"configured": bool(config.get("headscale")), "subjects": 0, "pending": 0}
+    blocking = [operation for operation in operations if operation["action"] == "update-user" and operation["body"].get("isForbidden") is True]
     if apply:
-        blocked_subjects = list(state.get("pending_revocations", []))
+        if migrated:
+            save_journal(config, journal)
         for operation in operations:
             query = {"id": operation["id"]}
             if operation["action"] == "update-user":
@@ -896,56 +1074,73 @@ def run(config, apply=False, http=None):
                 if mutable_digest(latest) != operation["expected_mutable"]:
                     raise SyncError("Casdoor groups/status/properties changed during apply; retry a fresh plan")
                 query["columns"] = ",".join(operation["body"])
+                if operation["body"].get("isForbidden") is True:
+                    # Durable intent before the block: the next applied run revokes it even if this one dies here.
+                    journal_subject(config, journal, operation["expected_id"], "sync")
             casdoor.call(operation["action"], query, operation["body"], mutate=True)
-            if operation["action"] == "update-user" and operation["body"].get("isForbidden") is True and operation["expected_id"] not in blocked_subjects:
-                blocked_subjects.append(operation["expected_id"])
-        pending = blocked_subjects
-        if blocked_subjects and config.get("headscale"):
-            # Casdoor blocks are applied; revoke the subjects' enrolled devices and keys.
-            revoked, pending = revoke_subjects(Tailnet(config["headscale"], http), blocked_subjects, (SyncError, TailnetError))
-            revocation.update(revoked)
-        revocation.update(subjects=len(blocked_subjects), pending=len(pending))
-        next_state["pending_revocations"] = pending if config.get("headscale") else []
+        if any(operation["action"] == "update-user" for operation in operations):
+            users, _ = casdoor.snapshot()
+        # Revocation targets come from the applied Casdoor state, never from memory alone.
+        revocation, failures = reconcile_revocations(config, http, casdoor, users, journal)
+        next_state["pending_revocations"] = []
         save_state(config["state_file"], next_state)
-        if pending and config.get("headscale"):
-            raise SyncError("Casdoor blocks were applied but Headscale revocation is pending for %d subject(s); it is retried on the next run" % len(pending))
+        if revocation["configured"] and revocation["pending"]:
+            raise pending_revocation_error(revocation, failures)
+    else:
+        targets, _ = revocation_targets(users, journal)
+        revocation = revocation_report(config, set(targets) | {operation["expected_id"] for operation in blocking})
     return {"status": "ok", "mode": "apply" if apply else "dry-run", "completed_at": int(time.time()), "revocation": revocation, **report}
 
 
 def offboard(config, target, apply=False, http=None):
-    """Immediate containment: block a Casdoor account, drop managed access and revoke Headscale access."""
+    """Immediate containment: block a Casdoor account, drop managed access and revoke Headscale access.
+
+    An applied offboarding holds the worker's state lock so it never interleaves
+    with a scheduled apply, and journals the subject before the block so a
+    failed revocation is completed by the next scheduled applied run.
+    """
     http = http or Http(config["http_timeout_seconds"], config["http_attempts"])
     organization = config["casdoor"]["organization"]
     owner, _, name = target.partition("/")
     if owner != organization or not name or "/" in name:
         raise SyncError("offboard target must be organization/name inside the configured organization")
-    casdoor = Casdoor(config["casdoor"], http)
-    user = casdoor.call("get-user", {"id": target})
-    if not isinstance(user, dict) or user.get("owner") != organization or user.get("name") != name:
-        raise SyncError("Casdoor user was not found in the configured organization")
-    subject = identifier(user.get("id"), "Casdoor subject")
-    admission = organization + "/" + config["admission_group"]
-    def managed(group):
-        return group == admission or any(group.startswith(organization + "/" + prefix) for prefix in PREFIXES)
-    current_groups = user.get("groups") or []
-    if not isinstance(current_groups, list) or any(not isinstance(item, str) for item in current_groups):
-        raise SyncError("Casdoor user groups are malformed")
-    updates = {"properties": {HOLD_MARKER: "true", "headplane_role": "member"}}
-    if user.get("isForbidden") is not True:
-        updates["isForbidden"] = True
-    retained = sorted(item for item in current_groups if not managed(item))
-    if retained != sorted(set(current_groups)):
-        updates["groups"] = retained
-    report = {"status": "ok", "mode": "offboard-apply" if apply else "offboard-dry-run", "target": target,
-              "casdoor_updates": sorted(updates), "revocation": {"configured": bool(config.get("headscale"))}}
-    if apply:
-        casdoor.call("update-user", {"id": target, "columns": ",".join(updates)}, updates, mutate=True)
-        if config.get("headscale"):
-            try:
-                report["revocation"].update(Tailnet(config["headscale"], http).revoke(subject))
-            except TailnetError as error:
-                raise SyncError(str(error)) from None
-    return report
+    lock = state_lock(config, config.get("lock_wait_seconds", 300)) if apply else None
+    try:
+        casdoor = Casdoor(config["casdoor"], http)
+        user = casdoor.call("get-user", {"id": target})
+        if not isinstance(user, dict) or user.get("owner") != organization or user.get("name") != name:
+            raise SyncError("Casdoor user was not found in the configured organization")
+        subject = identifier(user.get("id"), "Casdoor subject")
+        admission = organization + "/" + config["admission_group"]
+        def managed(group):
+            return group == admission or any(group.startswith(organization + "/" + prefix) for prefix in PREFIXES)
+        current_groups = user.get("groups") or []
+        if not isinstance(current_groups, list) or any(not isinstance(item, str) for item in current_groups):
+            raise SyncError("Casdoor user groups are malformed")
+        updates = {"properties": {HOLD_MARKER: "true", "headplane_role": "member"}}
+        if (user.get("properties") or {}).get(REVOKED_MARKER):
+            # Same reason as in plan(): a stale marker must not hide this block from the marker-based retry.
+            updates["properties"][REVOKED_MARKER] = ""
+        if user.get("isForbidden") is not True:
+            updates["isForbidden"] = True
+        retained = sorted(item for item in current_groups if not managed(item))
+        if retained != sorted(set(current_groups)):
+            updates["groups"] = retained
+        report = {"status": "ok", "mode": "offboard-apply" if apply else "offboard-dry-run", "target": target,
+                  "casdoor_updates": sorted(updates), "revocation": revocation_report(config, [subject])}
+        if apply:
+            journal = load_journal(config)
+            journal_subject(config, journal, subject, "offboard")
+            casdoor.call("update-user", {"id": target, "columns": ",".join(updates)}, updates, mutate=True)
+            if config.get("headscale"):
+                counters, failures = apply_revocations(config, http, casdoor, [user], journal, [subject])
+                report["revocation"] = revocation_report(config, [subject], counters)
+                if failures:
+                    raise SyncError("Casdoor block is applied but Headscale revocation failed (%s); the next scheduled applied run retries it from the journal" % failures[-1])
+        return report
+    finally:
+        if lock is not None:
+            lock.close()
 
 
 def main(argv=None):
@@ -959,6 +1154,7 @@ def main(argv=None):
     parser.add_argument("--offboard", metavar="ORG/NAME", help="block one Casdoor account now and revoke its Headscale nodes/keys (dry run unless --apply)")
     parser.add_argument("--watch", action="store_true", help="repeat until stopped; failures retry on the next interval")
     args = parser.parse_args(argv)
+    lock = watch_lock = None
     try:
         config = load_config(args.config)
         if args.audit or args.permissions:
@@ -973,17 +1169,15 @@ def main(argv=None):
                 raise SyncError("Offboarding is one-shot; do not combine --offboard with --profile-only or --watch")
             print(json.dumps(offboard(config, args.offboard, args.apply), ensure_ascii=False, sort_keys=True))
             return 0
-        lock = None
-        if args.apply:
-            lock_path = Path(config["state_file"] + ".lock")
-            lock_path.parent.mkdir(parents=True, exist_ok=True)
-            lock = lock_path.open("a")
-            try:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                raise SyncError("another worker holds the state lock") from None
+        if args.apply and args.watch:
+            # One continuous worker per state directory. The state lock itself is
+            # taken inside the loop and held only around each run, so --offboard --apply
+            # can interleave and a refused interval is retried like any other failure.
+            watch_lock = state_lock(config, suffix=".watch.lock")
         while True:
             try:
+                if args.apply and lock is None:
+                    lock = state_lock(config)
                 report = profile_only(config, args.apply) if args.profile_only else run(config, args.apply)
                 print(json.dumps(report, sort_keys=True), flush=True)
                 if args.apply:
@@ -993,14 +1187,24 @@ def main(argv=None):
                 print(json.dumps({"status": "error", "error": message, "completed_at": int(time.time())}), file=sys.stderr, flush=True)
                 if not args.watch:
                     return 1
+            finally:
+                if lock is not None:
+                    lock.close()
+                    lock = None
             if not args.watch:
                 return 0
             time.sleep(config["interval_seconds"])
-    except SyncError as error:
-        print(json.dumps({"status": "error", "error": str(error)}), file=sys.stderr)
+    except (SyncError, OSError) as error:
+        # OSError: journal or lock I/O of --offboard --apply, which runs outside the interval loop.
+        message = str(error) if isinstance(error, SyncError) else "local state I/O failed"
+        print(json.dumps({"status": "error", "error": message}), file=sys.stderr)
         return 1
     except KeyboardInterrupt:
         return 0
+    finally:
+        for handle in (lock, watch_lock):
+            if handle is not None:
+                handle.close()
 
 
 if __name__ == "__main__":

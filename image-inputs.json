@@ -2,7 +2,7 @@
   "schema_version": 1,
   "platform": "linux/amd64",
   "images": {
-    "sync": "tailnet/sync:2026.09-rc.2",
+    "sync": "tailnet/sync:2026.09-rc.3",
     "database": "postgres:17.6-alpine",
     "reverse_proxy": "caddy:2.10.2-alpine"
   }

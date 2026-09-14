@@ -180,7 +180,7 @@ class BundleTests(unittest.TestCase):
             self.export()
 
     def test_export_rejects_missing_wrong_platform_or_revision_images(self):
-        reference = 'tailnet/headscale:2026.09-rc.2'
+        reference = 'tailnet/headscale:2026.09-rc.3'
         image = copy.deepcopy(self.docker.images[reference])
         for mutation in ('missing', 'platform', 'revision'):
             with self.subTest(mutation=mutation):

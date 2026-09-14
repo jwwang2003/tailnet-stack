@@ -94,8 +94,8 @@ frontendBaseDir = "./web/build"
     env = {
         'COMPOSE_PROJECT_NAME': 'integrated-tailnet', 'RUNTIME_DIR': str(output), 'RUN_UID': str(os.getuid()), 'RUN_GID': str(os.getgid()),
         'CASDOOR_HOST': site['casdoor_host'], 'HEADSCALE_HOST': site['headscale_host'], 'HEADPLANE_HOST': site['headplane_host'],
-        'HEADSCALE_IMAGE': 'tailnet/headscale:2026.09-rc.2', 'HEADPLANE_IMAGE': 'tailnet/headplane:2026.09-rc.2',
-        'CASDOOR_IMAGE': 'tailnet/casdoor:2026.09-rc.2', 'POSTGRES_IMAGE': inputs['images']['database'],
+        'HEADSCALE_IMAGE': 'tailnet/headscale:2026.09-rc.3', 'HEADPLANE_IMAGE': 'tailnet/headplane:2026.09-rc.3',
+        'CASDOOR_IMAGE': 'tailnet/casdoor:2026.09-rc.3', 'POSTGRES_IMAGE': inputs['images']['database'],
         'CADDY_IMAGE': inputs['images']['reverse_proxy'], 'WORKER_IMAGE': inputs['images']['sync'],
         'HEADPLANE_ORGANIZATION_NAME': '', 'HEADPLANE_ORGANIZATION_LOGO_URL': '',
         'HEADPLANE_ORGANIZATION_NAME_EN': '', 'HEADPLANE_ORGANIZATION_NAME_ZH': ''

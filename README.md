@@ -8,11 +8,12 @@ evidence.
 
 ## Release status
 
-`integrated-2026.09.0-rc.2` is a **release candidate, not production-ready**.
-The 135 local tests pass, the six-image bundle validates, and sandbox directory
-population and isolated restore are recorded. A follow-up review reproduced two
-revocation retry failures; full Feishu lifecycle, public OIDC, and a two-device
-pilot also remain incomplete. See the [release review and deployment sequence](docs/production-readiness.md).
+`integrated-2026.09.0-rc.3` is a **release candidate, not production-ready**.
+The 168 local tests pass, the six-image bundle validates, and sandbox directory
+population and isolated restore are recorded. RC3 fixes the two revocation retry
+failures a follow-up review reproduced in RC2 (durable revocation journal and
+Casdoor marker, regression-tested); full Feishu lifecycle, public OIDC, and a
+two-device pilot remain incomplete. See the [release review and deployment sequence](docs/production-readiness.md).
 The promotion checker must pass after the evidence has been reviewed:
 
 ```sh

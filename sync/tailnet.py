@@ -110,19 +110,3 @@ class Tailnet:
                     self.call("POST", "preauthkey/expire", body={"id": _numeric_id(key.get("id"), "preauth key")}, mutate=True)
                     report["preauth_keys_expired"] += 1
         return report
-
-
-def revoke_subjects(tailnet, subjects, retryable=(TailnetError,)):
-    """Revoke each subject; return (aggregate report, subjects that still need retry)."""
-    aggregate = {"subjects_revoked": 0, "headscale_users": 0, "nodes_expired": 0, "nodes_deleted": 0, "preauth_keys_expired": 0}
-    pending = []
-    for subject in subjects:
-        try:
-            result = tailnet.revoke(subject)
-        except retryable:  # transport, API, or malformed responses; retried next run
-            pending.append(subject)
-            continue
-        aggregate["subjects_revoked"] += 1
-        for key, value in result.items():
-            aggregate[key] += value
-    return aggregate, pending

@@ -44,7 +44,7 @@ class ConfigureTests(unittest.TestCase):
             for component, key in (('headscale', 'HEADSCALE_IMAGE'),
                                    ('headplane', 'HEADPLANE_IMAGE'),
                                    ('casdoor', 'CASDOOR_IMAGE'), ('sync', 'WORKER_IMAGE')):
-                self.assertEqual(fresh[key], f'tailnet/{component}:2026.09-rc.2')
+                self.assertEqual(fresh[key], f'tailnet/{component}:2026.09-rc.3')
             self.assertFalse((root / 'secrets/feishu_app_secret').exists())
             self.assertFalse((root / 'sync/sync.json').exists())
             legacy = dict(fresh, COMPOSE_PROJECT_NAME='feishu-tailnet',

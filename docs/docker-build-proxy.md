@@ -92,10 +92,10 @@ Keep the Windows proxy and SSH connection open through all four builds. An SSH r
 After the build script exits successfully:
 
 ```sh
-docker image inspect tailnet/headscale:2026.09-rc.2 --format '{{.Id}}'
-docker image inspect tailnet/headplane:2026.09-rc.2 --format '{{.Id}}'
-docker image inspect tailnet/casdoor:2026.09-rc.2 --format '{{.Id}}'
-docker image inspect tailnet/sync:2026.09-rc.2 --format '{{.Id}}'
+docker image inspect tailnet/headscale:2026.09-rc.3 --format '{{.Id}}'
+docker image inspect tailnet/headplane:2026.09-rc.3 --format '{{.Id}}'
+docker image inspect tailnet/casdoor:2026.09-rc.3 --format '{{.Id}}'
+docker image inspect tailnet/sync:2026.09-rc.3 --format '{{.Id}}'
 ```
 
 Also pull the deployment's PostgreSQL and Caddy images while the daemon proxy is available if direct registry access is unavailable. Use the exact references from `.runtime/compose.env`.

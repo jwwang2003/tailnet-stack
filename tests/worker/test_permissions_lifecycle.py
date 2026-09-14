@@ -137,7 +137,7 @@ class PermissionAndLifecycleTests(unittest.TestCase):
         self.api.source_users["od_platform"][0]["status"]["is_frozen"] = True
         report = self.run_worker()
         self.assertEqual(report["users_blocked"], 1)
-        self.assertEqual(report["revocation"], {"configured": True, "subjects": 1, "pending": 0, "subjects_revoked": 1,
+        self.assertEqual(report["revocation"], {"configured": True, "targets": 1, "revoked": 1, "pending": 0,
                                                 "headscale_users": 1, "nodes_expired": 2, "nodes_deleted": 0, "preauth_keys_expired": 1})
         expired_nodes = sorted(path.split("/")[-2] for method, path, _, _ in self.api.headscale_calls if path.endswith("/expire") and "/node/" in path)
         self.assertEqual(expired_nodes, ["11", "12"])
@@ -145,7 +145,8 @@ class PermissionAndLifecycleTests(unittest.TestCase):
         self.assertTrue(all(node.get("expired") for node in self.api.headscale_nodes if node["user"]["id"] == "7"))
         self.assertNotIn("expired", self.api.headscale_nodes[2])
         self.assertEqual(json.loads(self.state.read_text())["pending_revocations"], [])
-        self.assertEqual(self.run_worker()["revocation"]["subjects"], 0)
+        self.assertEqual(self.alice["properties"][w.REVOKED_MARKER].isdigit(), True)
+        self.assertEqual(self.run_worker()["revocation"]["targets"], 0)
 
     def test_block_can_delete_nodes(self):
         self.link_headscale()
@@ -165,12 +166,14 @@ class PermissionAndLifecycleTests(unittest.TestCase):
         with self.assertRaisesRegex(w.SyncError, "revocation is pending"):
             self.run_worker()
         self.assertTrue(self.alice["isForbidden"])
-        self.assertEqual(json.loads(self.state.read_text())["pending_revocations"], ["casdoor-alice"])
+        journal = Path(self.config["state_file"] + ".revocations.json")
+        self.assertIn("casdoor-alice", json.loads(journal.read_text())["pending"])
         self.api.fail_path = None
         report = self.run_worker()
-        self.assertEqual(report["revocation"]["subjects"], 1)
+        self.assertEqual(report["revocation"]["targets"], 1)
+        self.assertEqual(report["revocation"]["revoked"], 1)
         self.assertEqual(report["revocation"]["nodes_expired"], 2)
-        self.assertEqual(json.loads(self.state.read_text())["pending_revocations"], [])
+        self.assertEqual(json.loads(journal.read_text())["pending"] if journal.exists() else {}, {})
 
     def test_pending_revocation_is_retried_in_staged_mode(self):
         self.link_headscale()
@@ -192,7 +195,8 @@ class PermissionAndLifecycleTests(unittest.TestCase):
         self.run_worker()
         self.api.source_users["od_platform"][0]["status"]["is_frozen"] = True
         report = self.run_worker()
-        self.assertEqual(report["revocation"], {"configured": False, "subjects": 1, "pending": 1})
+        self.assertEqual(report["revocation"], {"configured": False, "targets": 1, "revoked": 0, "pending": 1,
+                                                "headscale_users": 0, "nodes_expired": 0, "nodes_deleted": 0, "preauth_keys_expired": 0})
         self.assertEqual(json.loads(self.state.read_text())["pending_revocations"], [])
         self.assertFalse(any(path.startswith("/api/v1/") for _, path, _ in self.api.calls))
 
