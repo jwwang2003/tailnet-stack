@@ -5,3 +5,19 @@ __pycache__/
 .venv/
 artifacts/
 backups/
+# Runtime material belongs on the deployment host or in a secret manager.
+.env.*
+!.env.example
+secrets/
+state/
+dist/
+*.local.yaml
+*.local.yml
+*.local.json
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+*.pem
+*.key
+*.py[cod]

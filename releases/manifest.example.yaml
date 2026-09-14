@@ -1,0 +1,33 @@
+# Replace every null with observed evidence before production promotion.
+schema_version: 1
+release: "feishu-2026.09.0-rc.1"
+integration_commit: null
+versions_lock_sha256: null
+created_at_utc: null
+platform: "linux/amd64"
+images:
+  headscale: null
+  headplane: null
+  casdoor: null
+  sync: null
+  reverse_proxy: null
+  database: null
+configuration_sha256: {}
+toolchains: {}
+migrations:
+  headscale: null
+  headplane: null
+  casdoor: null
+validation:
+  oauth_and_identity_linking: null
+  directory_lifecycle: null
+  headscale_and_headplane_oidc: null
+  existing_access_revocation: null
+  isolated_restore: null
+backup:
+  reference: null
+  restored_successfully_at_utc: null
+rollback:
+  prior_release: null
+  prior_images_retained: false
+  pre_migration_backup_reference: null
