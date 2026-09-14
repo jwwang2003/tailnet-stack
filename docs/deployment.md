@@ -6,7 +6,7 @@ For a deployment without Feishu, start with the [Integrated Tailnet deployment g
 
 This guide takes a **new Ubuntu 24.04 x86-64 server** from an empty installation to a pilot with Feishu login, Casdoor user synchronization, Headscale device enrollment, and Headplane administration. Run server commands as the same non-root deployment user throughout. Steps explicitly marked **laptop** or **browser** run elsewhere.
 
-This is the `2026.09-rc.2` deployment. Local code/configuration tests have passed; a real Feishu tenant login and a complete container/restore rehearsal have not yet been performed. The checkpoints below are intended to produce that evidence. Do not replace patched images with stock Casdoor or Headscale images.
+This is the `2026.09-rc.2` candidate deployment. The sandbox populated 207 Casdoor accounts, passed the authorization probe and an isolated restore rehearsal, and produced a validated six-image bundle. Production remains blocked by two reproduced revocation retry failures, missing Feishu scopes, and the public DNS/TLS and device pilot. Start with the [release review and deployment sequence](production-readiness.md); the steps below prepare a staging site. Keep the pinned patched images.
 
 ## 1. Fill in your deployment worksheet
 
