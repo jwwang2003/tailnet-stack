@@ -75,7 +75,7 @@ def binding():
 
 
 def alias(key, image_id):
-    return 'offline/feishu-' + key.replace('_', '-') + ':sha256-' + image_id[7:]
+    return 'offline/tailnet-' + key.replace('_', '-') + ':sha256-' + image_id[7:]
 
 
 def inspect(reference, engine='docker'):
@@ -183,7 +183,10 @@ def validate_bundle(bundle):
         image_id = item.get('id')
         require(isinstance(image_id, str) and image_id.startswith('sha256:') and
                 SHA.fullmatch(image_id[7:]), 'Invalid manifest image ID: ' + key)
-        require(item.get('alias') == alias(key, image_id), 'Invalid offline alias: ' + key)
+        # Legacy aliases remain valid; source/checksum binding is still mandatory.
+        aliases = (alias(key, image_id),
+                   'offline/feishu-' + key.replace('_', '-') + ':sha256-' + image_id[7:])
+        require(item.get('alias') in aliases, 'Invalid offline alias: ' + key)
         require(item.get('os') == 'linux' and
                 item.get('architecture') == manifest['platform'].split('/')[1], 'Invalid image platform: ' + key)
         validate_reference(item.get('reference'))

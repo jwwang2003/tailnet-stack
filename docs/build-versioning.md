@@ -13,10 +13,10 @@ repository:
 
 ```text
 official release commit
-  └── downstream/feishu-2026.09
+  └── downstream/integrated-2026.09
         └── feature/<bounded-change>
               └── reviewed linear commits
-                    └── production/feishu-2026.09
+                    └── production/integrated-2026.09
 ```
 
 `main` (or Casdoor's `master`) remains the fork-sync branch. Do not develop,
@@ -80,8 +80,8 @@ the commit and downstream version with `source_commit` and the approved release
 version before executing:
 
 ```sh
-git worktree add --detach ../build-headscale-feishu-2026.09 5aff68b5b9921db5ccb88013bb1740077ab872fb
-cd ../build-headscale-feishu-2026.09
+git worktree add --detach ../build-headscale-integrated-2026.09 "$(python3 ../tailscale-feishu-integration/scripts/release.py field headscale source_commit)"
+cd ../build-headscale-integrated-2026.09
 git status --short
 git rev-parse HEAD
 go version
@@ -89,7 +89,7 @@ go mod download
 go mod verify
 go test -race ./hscontrol/...
 mkdir -p dist
-go build -trimpath -buildmode=pie -ldflags '-X main.version=v0.29.3-feishu.1' -o dist/headscale ./cmd/headscale
+go build -trimpath -buildmode=pie -ldflags '-X github.com/juanfont/headscale/hscontrol/types.VersionOverride=v0.29.3-integrated.1' -o dist/headscale ./cmd/headscale
 ./dist/headscale version
 sha256sum dist/headscale
 ```
@@ -113,7 +113,7 @@ already builds its Go components and web application, and provides an explicit
 `final` production target. From that worktree:
 
 ```sh
-docker build --target final --build-arg HEADPLANE_VERSION=0.7.1-feishu.1 --build-arg IMAGE_TAG=0.7.1-feishu.1 -t headplane:0.7.1-feishu.1 .
+docker build --target final --build-arg HEADPLANE_VERSION=0.7.1-integrated.1 --build-arg IMAGE_TAG=0.7.1-integrated.1 -t headplane:0.7.1-integrated.1 .
 ```
 
 For local Headplane checks, follow its pinned `package.json`: Node 24,
@@ -126,7 +126,7 @@ The pinned Casdoor Dockerfile has an explicit `STANDARD` target and defaults to 
 different final target. Select `STANDARD` for the standalone application image:
 
 ```sh
-docker build --target STANDARD -t casdoor:4.3.0-feishu.1 .
+docker build --target STANDARD -t casdoor:4.3.0-integrated.1 .
 ```
 
 Upstream Dockerfiles contain mutable base image tags and package repositories.
@@ -144,7 +144,7 @@ separate actions from a successful local build.
    in the release manifest. Do not claim `compatibility_verified: true` before the
    following checks pass.
 2. Validate the service configurations with their pinned binaries, then exercise
-   Feishu login before and after synchronization, stable identity across both
+   selected-provider login before and after account lifecycle changes, stable identity across both
    downstream clients, directory membership changes, and existing access revocation.
 3. Test the exact candidate images in an isolated environment with a restored
    backup. Record migration outcomes, configuration checksums, and test evidence
@@ -153,7 +153,7 @@ separate actions from a successful local build.
 4. Commit the release evidence and fast-forward each service's production branch
    to the selected component commit. Create matching annotated release-series tags
    in the three forks and this repository. Component tags can share the series
-   identifier, such as `feishu-2026.09.0-rc.1`; keep upstream tags unchanged.
+   identifier, such as `integrated-2026.09.0-rc.1`; keep upstream tags unchanged.
 5. Deploy the complete candidate tuple. Promote to a stable tag only after the
    tenant pilot and restore checks pass. A production branch is a deployment
    pointer, not evidence by itself that those checks passed.
@@ -185,7 +185,7 @@ old Headscale binary against a database migrated by a newer release. Database
 rollback means restoring the pre-migration snapshot, not editing migration tables
 or merely changing an image tag.
 
-After rollback, check existing client connectivity, new Feishu authentication,
+After rollback, check existing client connectivity, new authentication through the configured provider,
 Headplane access, and directory reconciliation. Record the restore timestamp and
 the amount of data lost since the snapshot. Keep synchronization paused until its
 stored identity mappings and current target database agree.

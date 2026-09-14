@@ -93,12 +93,12 @@ sync_image=$(python3 "$integration_root/scripts/release.py" support-image sync)
 integration_commit=$(git -C "$integration_root" rev-parse HEAD)
 
 build_image "$integration_root/build/headscale.Dockerfile" \
-  --build-arg "HEADSCALE_VERSION=${HEADSCALE_VERSION:-v0.29.3-feishu.1}" \
+  --build-arg "HEADSCALE_VERSION=${HEADSCALE_VERSION:-v0.29.3-integrated.1}" \
   --label "org.opencontainers.image.revision=$headscale_commit" \
   --tag "$headscale_image" "$workspace/headscale"
 build_image "$workspace/headplane/Dockerfile" --target final \
-  --build-arg "HEADPLANE_VERSION=${HEADPLANE_VERSION:-0.7.1-feishu.1}" \
-  --build-arg "IMAGE_TAG=${HEADPLANE_VERSION:-0.7.1-feishu.1}" \
+  --build-arg "HEADPLANE_VERSION=${HEADPLANE_VERSION:-0.7.1-integrated.1}" \
+  --build-arg "IMAGE_TAG=${HEADPLANE_VERSION:-0.7.1-integrated.1}" \
   --label "org.opencontainers.image.revision=$headplane_commit" \
   --tag "$headplane_image" "$workspace/headplane"
 build_image "$workspace/casdoor/Dockerfile" --target STANDARD \

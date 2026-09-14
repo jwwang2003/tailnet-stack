@@ -1,6 +1,6 @@
 # Replace every null with observed evidence before production promotion.
 schema_version: 1
-release: "feishu-2026.09.0-rc.1"
+release: "integrated-2026.09.0-rc.1"
 integration_commit: null
 versions_lock_sha256: null
 created_at_utc: null

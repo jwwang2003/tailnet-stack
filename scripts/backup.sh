@@ -32,7 +32,7 @@ command -v flock >/dev/null || { echo 'flock is required.' >&2; exit 1; }
 exec 9>"$runtime/.maintenance.lock"
 flock -n 9 || { echo 'Another backup or maintenance task holds the runtime lock.' >&2; exit 1; }
 compose=(docker compose --env-file "$runtime/compose.env" --file "$integration_root/deploy/compose.yaml" --profile '*')
-staging=$(mktemp -d "${TMPDIR:-/tmp}/feishu-backup.XXXXXX")
+staging=$(mktemp -d "${TMPDIR:-/tmp}/tailnet-backup.XXXXXX")
 partial=$(mktemp "$archive.partial.XXXXXX")
 restart_services=()
 restart_required=false

@@ -1,10 +1,10 @@
 # Source baseline. Image digests are recorded only after building/pulling and testing.
 schema_version: 1
 release:
-  series: "feishu-2026.09"
+  series: "integrated-2026.09"
   status: "candidate"
-  downstream_branch: "downstream/feishu-2026.09"
-  production_branch: "production/feishu-2026.09"
+  downstream_branch: "downstream/integrated-2026.09"
+  production_branch: "production/integrated-2026.09"
   integration_repository: "https://github.com/jwwang2003/tailscale-feishu-integration"
   compatibility_verified: false
 components:
@@ -15,7 +15,7 @@ components:
     tag: "v0.29.3"
     upstream_commit: "5aff68b5b9921db5ccb88013bb1740077ab872fb"
     source_commit: "fc99ff8476cfcb816dd52a05d3ae6e7bfbc4fb49"
-    image: "feishu/headscale:2026.09-rc.1"
+    image: "tailnet/headscale:2026.09-rc.1"
     image_digest: null
   headplane:
     upstream: "https://github.com/tale/headplane"
@@ -23,7 +23,7 @@ components:
     tag: "v0.7.1"
     upstream_commit: "30c842ed8dbf011e78596e3a474133ec4069ba79"
     source_commit: "30c842ed8dbf011e78596e3a474133ec4069ba79"
-    image: "feishu/headplane:2026.09-rc.1"
+    image: "tailnet/headplane:2026.09-rc.1"
     image_digest: null
   casdoor:
     upstream: "https://github.com/casdoor/casdoor"
@@ -31,5 +31,5 @@ components:
     tag: "v4.3.0"
     upstream_commit: "270882288296b9611e579a931242ff65f104c29b"
     source_commit: "50dcad6b47796622f0896f16c0beef027976677a"
-    image: "feishu/casdoor:2026.09-rc.1"
+    image: "tailnet/casdoor:2026.09-rc.1"
     image_digest: null

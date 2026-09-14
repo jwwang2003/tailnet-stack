@@ -1,4 +1,11 @@
-# Deployment boundaries
+# Integrated Tailnet deployment boundaries
+
+Start with the [provider-neutral deployment guide](../docs/integrated-platform.md).
+The core is Headscale, Headplane, Casdoor, PostgreSQL, and Caddy. The Feishu
+worker belongs to the optional `sync` Compose profile; the renderer does not
+require Feishu credentials. New deployments use project `integrated-tailnet`;
+existing runtime project names and image pins are preserved on rerender.
+
 
 Keep environment-specific configuration, credentials, TLS private keys, and
 database backups outside the source checkout. Templates in these component
@@ -30,6 +37,6 @@ restore into an isolated environment before allowing traffic. Do not copy a live
 SQLite main database while ignoring its WAL.
 
 Identity discovery must establish Casdoor's exact issuer, client behavior, claims,
-and Feishu identifier mapping before runtime templates are declared ready. Treat
+and the chosen provider's identifier mapping before runtime templates are declared ready. Treat
 local image tags as candidates until their deployed digests and end-to-end tenant
 test results are recorded in the release manifest.

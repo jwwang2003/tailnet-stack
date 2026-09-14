@@ -1,5 +1,9 @@
 # Operator handbook
 
+Start with the [core deployment guide](integrated-platform.md) for provider-neutral setup.
+The Feishu identity and synchronization sections below apply only when that
+optional adapter is enabled; backup, restore, and service operations apply to the core.
+
 This runbook uses the Compose deployment in `deploy/compose.yaml`. It separates
 local implementation checks from a live Feishu tenant pilot. The implementation
 environment had Python available, but no Docker daemon/client or Go toolchain;
@@ -184,8 +188,8 @@ credential material and must not be pasted into public tickets:
 Run backups from the same integration release checkout used by the active stack:
 
 ```sh
-mkdir -m 700 -p /srv/feishu-backups
-bash scripts/backup.sh .runtime /srv/feishu-backups/feishu-2026-09-14.tar.gz
+mkdir -m 700 -p /srv/tailnet-backups
+bash scripts/backup.sh .runtime /srv/tailnet-backups/tailnet-2026-09-14.tar.gz
 ```
 
 The helper refuses an existing output file and stops worker, Headplane, Headscale,
@@ -209,7 +213,7 @@ Restore first on an isolated host with no public DNS traffic. Supply the exact
 release lock retained with the backup and a new directory/project name:
 
 ```sh
-bash scripts/restore.sh /srv/feishu-backups/feishu-2026-09-14.tar.gz versions.lock.yaml /srv/feishu-restore-20260914 restore-20260914
+bash scripts/restore.sh /srv/tailnet-backups/tailnet-2026-09-14.tar.gz versions.lock.yaml /srv/tailnet-restore-20260914 restore-20260914
 ```
 
 Restore refuses an existing directory, existing project containers, existing
@@ -224,7 +228,7 @@ for a retry after diagnosing the failure.
 Use the restored project and files for every follow-up command:
 
 ```sh
-restored=/srv/feishu-restore-20260914
+restored=/srv/tailnet-restore-20260914
 rdc=(docker compose --project-name restore-20260914 --env-file "$restored/runtime/compose.env" --file "$restored/deploy/compose.yaml" --profile '*')
 "${rdc[@]}" up --detach casdoor headscale
 ```

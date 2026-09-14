@@ -2,9 +2,9 @@
 
 **Using Podman instead of Docker Desktop? Follow [the Podman build guide](podman-build.md) for local setup/build/export, then use the shared transfer and server-import steps here.**
 
-This is the preferred initial deployment path for Fysics. You do not need to buy ACR or set up any registry. Windows performs the builds and downloads. The server receives six finished Linux images plus metadata, then starts them with the existing runtime configuration.
+This is the preferred initial deployment path for Integrated Tailnet. You do not need to buy ACR or set up any registry. Windows performs the builds and downloads. The server receives six finished Linux images plus metadata, then starts them with the existing runtime configuration.
 
-The bundle contains **Headscale, Headplane, Casdoor, the Feishu worker, PostgreSQL, and Caddy**. It contains no `.runtime` directory, application credentials, database contents, or TLS private keys. Application configuration and first-time Feishu/Casdoor setup still happen on the server.
+The bundle contains **Headscale, Headplane, Casdoor, the Feishu worker, PostgreSQL, and Caddy**. It contains no `.runtime` directory, application credentials, database contents, or TLS private keys. Application configuration and first-time Casdoor setup still happen on the server. The bundled Feishu worker is optional and remains stopped unless the `sync` profile or worker service is explicitly selected.
 
 ## 1. Check the destination architecture
 
@@ -56,10 +56,10 @@ sudo apt-get update
 sudo apt-get install -y git python3 python3-venv
 mkdir -p "$HOME/tailscale-open"
 cd "$HOME/tailscale-open"
-git clone --branch release/feishu-2026.09-rc.1 https://github.com/jwwang2003/headscale.git
-git clone --branch release/feishu-2026.09-rc.1 https://github.com/jwwang2003/headplane.git
-git clone --branch release/feishu-2026.09-rc.1 https://github.com/jwwang2003/casdoor.git
-git clone --branch release/feishu-2026.09-rc.1 https://github.com/jwwang2003/tailscale-feishu-integration.git
+git clone --branch release/integrated-2026.09-rc.1 https://github.com/jwwang2003/headscale.git
+git clone --branch release/integrated-2026.09-rc.1 https://github.com/jwwang2003/headplane.git
+git clone --branch release/integrated-2026.09-rc.1 https://github.com/jwwang2003/casdoor.git
+git clone --branch release/integrated-2026.09-rc.1 https://github.com/jwwang2003/tailscale-feishu-integration.git
 cd tailscale-feishu-integration
 python3 -m venv .venv
 . .venv/bin/activate
@@ -144,7 +144,7 @@ If the integration checkout already exists:
 
 ```sh
 cd "$HOME/tailscale-open/tailscale-feishu-integration"
-git fetch origin release/feishu-2026.09-rc.1
+git fetch origin release/integrated-2026.09-rc.1
 ```
 
 For a fresh server, install the runtime tools using [deployment steps 1–3](deployment.md), then clone only the integration repository. Git checkout still needs GitHub connectivity; the image-import/start path does not need registry access.
@@ -231,16 +231,16 @@ For a first deployment, follow [deployment step 7 onward](deployment.md#7-start-
 stack up -d db casdoor
 ```
 
-Complete private Casdoor bootstrap, Feishu app settings, native syncer/worker setup, public TLS, Headscale enrollment, and first-owner setup in their documented order. Loading images does not configure OAuth or start every service automatically.
+Follow the [core deployment guide](integrated-platform.md) for private Casdoor bootstrap, your chosen identity provider, public TLS, Headscale enrollment, and first-owner setup. Enable the [Feishu recipe](deployment.md) only when using that provider and directory adapter. Loading images does not configure OAuth or start every service automatically.
 
 For an existing installation, take a backup and review migrations before an update; then recreate only the services being updated at the planned maintenance time. Avoid bringing up every profile blindly during first-time setup.
 
-The running apps still need their normal connectivity to Feishu, DNS, certificate authorities, and clients. “Offline image delivery” means no remote registry/build downloads, not an air-gapped authentication system.
+The running apps still need connectivity to the selected identity provider, DNS, certificate authorities, and clients. The optional Feishu worker also needs the Feishu APIs. “Offline image delivery” means no remote registry/build downloads, not an air-gapped authentication system.
 
 ## 10. Keep the bundle for rollback and release evidence
 
 Retain the bundle and the matching pre-upgrade application backup. Rolling back images after a database migration also requires restoring the corresponding data backup; image files alone cannot reverse migrations.
 
-The current production promotion checklist still requires live Feishu/OIDC, directory lifecycle, access revocation, and restore evidence. Offline releases can provide the bundle archive checksum and per-image content IDs instead of registry digests. See [build/versioning](build-versioning.md) for recording the offline distribution manifest.
+The current production promotion checklist still requires live selected-provider/OIDC, account and directory lifecycle, access revocation, and restore evidence. Offline releases can provide the bundle archive checksum and per-image content IDs instead of registry digests. See [build/versioning](build-versioning.md) for recording the offline distribution manifest.
 
 The repository tests use mocked Docker commands for bundle error paths and metadata checks. An actual Windows build, transfer, Docker load, and live deployment must still pass on your machines; no such live result is implied by these instructions.

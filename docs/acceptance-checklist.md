@@ -1,5 +1,7 @@
 # Pilot and release acceptance
 
+For the core platform, validate the selected provider, stable OIDC identity, admission and role boundaries, existing-access revocation, and isolated restore. The Feishu-specific checks below apply only when that adapter is enabled; record the alternative account lifecycle evidence in the release manifest when it is disabled.
+
 Record date, exact image digests/source lock, test environment, result, and evidence
 for each item. Fixture tests validate implementation behavior; they do not replace
 live Feishu permission, OAuth, or network tests. The development environment used
@@ -21,7 +23,7 @@ host. Do not set `compatibility_verified: true` while these checks are pending.
 - [ ] Initial administrator credentials are replaced, Headplane owner bootstrap
       is restricted, employee registration is controlled, and API keys stay private.
 
-## Feishu identity and directory lifecycle
+## Optional Feishu identity and directory lifecycle
 
 - [ ] The Feishu App has the actual required permissions and access range; record
       the expected population and department/group scope.

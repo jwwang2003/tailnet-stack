@@ -1,6 +1,8 @@
-# Deploy the Feishu tailnet: command-by-command guide
+# Optional Feishu integration: command-by-command guide
 
 **Recommended:** [build on Windows and transfer a six-image bundle over SSH](local-build-deploy.md). That path replaces remote source builds and needs no paid registry. Return to step 7 below for application setup, using the offline Compose overlay from that guide.
+
+For a deployment without Feishu, start with the [Integrated Tailnet deployment guide](integrated-platform.md). This recipe enables the optional Feishu login and directory adapter; its provider credentials and permissions are required only for this recipe.
 
 This guide takes a **new Ubuntu 24.04 x86-64 server** from an empty installation to a pilot with Feishu login, Casdoor user synchronization, Headscale device enrollment, and Headplane administration. Run server commands as the same non-root deployment user throughout. Steps explicitly marked **laptop** or **browser** run elsewhere.
 
@@ -67,7 +69,7 @@ If the laptop does not have the repository, download the helper using your local
 
 ```sh
 curl --fail --location --proxy http://127.0.0.1:7890 \
-  https://raw.githubusercontent.com/jwwang2003/tailscale-feishu-integration/release/feishu-2026.09-rc.1/scripts/remote-proxy-shell.sh \
+  https://raw.githubusercontent.com/jwwang2003/tailscale-feishu-integration/release/integrated-2026.09-rc.1/scripts/remote-proxy-shell.sh \
   -o remote-proxy-shell.sh
 less remote-proxy-shell.sh
 bash remote-proxy-shell.sh wjw@YOUR_SERVER_IP
@@ -99,7 +101,7 @@ SSH aliases and identity/jump-host settings from `~/.ssh/config` work. The scrip
 printf 'Proxy: %s\n' "$https_proxy"
 ss -ltn '( sport = :17890 )'
 curl --head --fail --max-time 20 https://github.com
-git ls-remote https://github.com/jwwang2003/tailscale-feishu-integration.git refs/heads/release/feishu-2026.09-rc.1
+git ls-remote https://github.com/jwwang2003/tailscale-feishu-integration.git refs/heads/release/integrated-2026.09-rc.1
 ```
 
 Expected: proxy URL `http://127.0.0.1:17890`, a loopback listener, an HTTPS response, and a Git commit/ref. Adjust the `ss` port if you selected another port. If forwarding fails, confirm the local proxy is running, the remote port is unused, and SSH server policy permits remote TCP forwarding. Keep `GatewayPorts` disabled or `clientspecified`; do not force wildcard listeners. No cloud firewall opening for port 17890 is needed.
@@ -164,10 +166,10 @@ For a **new server checkout**:
 ```sh
 mkdir -p "$HOME/tailscale-open"
 cd "$HOME/tailscale-open"
-git clone --branch release/feishu-2026.09-rc.1 https://github.com/jwwang2003/headscale.git
-git clone --branch release/feishu-2026.09-rc.1 https://github.com/jwwang2003/headplane.git
-git clone --branch release/feishu-2026.09-rc.1 https://github.com/jwwang2003/casdoor.git
-git clone --branch release/feishu-2026.09-rc.1 https://github.com/jwwang2003/tailscale-feishu-integration.git
+git clone --branch release/integrated-2026.09-rc.1 https://github.com/jwwang2003/headscale.git
+git clone --branch release/integrated-2026.09-rc.1 https://github.com/jwwang2003/headplane.git
+git clone --branch release/integrated-2026.09-rc.1 https://github.com/jwwang2003/casdoor.git
+git clone --branch release/integrated-2026.09-rc.1 https://github.com/jwwang2003/tailscale-feishu-integration.git
 cd tailscale-feishu-integration
 python3 -m venv .venv
 . .venv/bin/activate
@@ -251,10 +253,10 @@ If registry access requires your Windows proxy, complete [the Docker tunnel setu
 
 ```sh
 bash scripts/build-products.sh ..
-docker image inspect feishu/headscale:2026.09-rc.1 --format '{{.Id}}'
-docker image inspect feishu/headplane:2026.09-rc.1 --format '{{.Id}}'
-docker image inspect feishu/casdoor:2026.09-rc.1 --format '{{.Id}}'
-docker image inspect feishu/sync:2026.09-rc.1 --format '{{.Id}}'
+docker image inspect tailnet/headscale:2026.09-rc.1 --format '{{.Id}}'
+docker image inspect tailnet/headplane:2026.09-rc.1 --format '{{.Id}}'
+docker image inspect tailnet/casdoor:2026.09-rc.1 --format '{{.Id}}'
+docker image inspect tailnet/sync:2026.09-rc.1 --format '{{.Id}}'
 ```
 
 Each inspect command should print an image ID. The script checks clean, matching source commits before building. Go, Node, and frontend build tools run inside the builders; a host Go installation is not required for this image path.

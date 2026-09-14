@@ -81,8 +81,10 @@ def check_offline_images(lock, manifest, lock_bytes, bundle):
         if not DIGEST.fullmatch(str(image_id)):
             raise ValueError("Offline image ID is invalid")
         component_name = component.replace("_", "-")
-        alias = f"offline/feishu-{component_name}:sha256-{image_id[7:]}"
-        if image.get("alias") != alias or manifest.get("images", {}).get(component) != alias:
+        aliases = tuple(f"offline/{namespace}-{component_name}:sha256-{image_id[7:]}"
+                        for namespace in ("tailnet", "feishu"))
+        alias = image.get("alias")
+        if alias not in aliases or manifest.get("images", {}).get(component) != alias:
             raise ValueError("Offline image alias differs")
         if f"{image.get('os')}/{image.get('architecture')}" != manifest.get("platform"):
             raise ValueError("Offline image platform differs")

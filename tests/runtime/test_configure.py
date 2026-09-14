@@ -21,7 +21,7 @@ class ConfigureTests(unittest.TestCase):
             policy.write_text('{"acls": [{"action":"accept"}]}')
             env = root / 'compose.env'
             env.write_text(env.read_text().replace('caddy:2.10.2-alpine', 'caddy@sha256:' + 'a'*64))
-            env.write_text(env.read_text().replace('COMPOSE_PROJECT_NAME=feishu-tailnet', 'COMPOSE_PROJECT_NAME=restored-tailnet'))
+            env.write_text(env.read_text().replace('COMPOSE_PROJECT_NAME=integrated-tailnet', 'COMPOSE_PROJECT_NAME=restored-tailnet'))
             configure.render(self.site, root)
             self.assertIn('COMPOSE_PROJECT_NAME=restored-tailnet', env.read_text())
             self.assertEqual(secret, (root / 'secrets/cookie_secret').read_text())
@@ -29,6 +29,37 @@ class ConfigureTests(unittest.TestCase):
             self.assertIn('caddy@sha256:', env.read_text())
             self.assertEqual((root / 'casdoor/app.conf').stat().st_mode & 0o777, 0o600)
             self.assertFalse((root / 'secrets/headscale_api_key').exists())
+    def test_fresh_core_and_legacy_runtime_rerender(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = configure.render(self.site, directory)
+            env = root / 'compose.env'
+            fresh = dict(line.split('=', 1) for line in env.read_text().splitlines())
+            self.assertEqual(fresh['COMPOSE_PROJECT_NAME'], 'integrated-tailnet')
+            for component, key in (('headscale', 'HEADSCALE_IMAGE'),
+                                   ('headplane', 'HEADPLANE_IMAGE'),
+                                   ('casdoor', 'CASDOOR_IMAGE'), ('sync', 'WORKER_IMAGE')):
+                self.assertEqual(fresh[key], f'tailnet/{component}:2026.09-rc.1')
+            self.assertFalse((root / 'secrets/feishu_app_secret').exists())
+            self.assertFalse((root / 'sync/sync.json').exists())
+            legacy = dict(fresh, COMPOSE_PROJECT_NAME='feishu-tailnet',
+                          HEADSCALE_IMAGE='feishu/headscale:2026.09-rc.1',
+                          HEADPLANE_IMAGE='offline/feishu-headplane:sha256-' + 'a' * 64,
+                          CASDOOR_IMAGE='feishu/casdoor@sha256:' + 'b' * 64,
+                          WORKER_IMAGE='feishu/sync:2026.09-rc.1')
+            env.write_text(''.join(f'{key}={value}\n' for key, value in legacy.items()))
+            configure.render(self.site, root)
+            self.assertEqual(dict(line.split('=', 1) for line in env.read_text().splitlines()), legacy)
+
+    def test_worker_is_an_optional_compose_profile(self):
+        import yaml
+        compose = yaml.safe_load((ROOT / 'deploy/compose.yaml').read_text())
+        self.assertEqual(compose['name'], 'integrated-tailnet')
+        services = compose['services']
+        self.assertEqual(services['worker']['profiles'], ['sync'])
+        for name in ('db', 'casdoor', 'headscale', 'headplane', 'proxy'):
+            self.assertNotIn('worker', services[name].get('depends_on', {}))
+        self.assertNotIn('feishu_app_secret', compose['secrets'])
+
     def test_host_injection_and_collision_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             for bad in ('https://example.com', 'example.com\nEVIL=1', '*.example.com'):

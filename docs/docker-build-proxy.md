@@ -41,7 +41,7 @@ A registry `401` is a normal unauthenticated challenge and confirms a completed 
 
 ```sh
 sudo mkdir -p /run/systemd/system/docker.service.d
-sudo tee /run/systemd/system/docker.service.d/90-feishu-tunnel-proxy.conf >/dev/null <<'EOF'
+sudo tee /run/systemd/system/docker.service.d/90-tailnet-tunnel-proxy.conf >/dev/null <<'EOF'
 [Service]
 Environment="HTTP_PROXY=http://127.0.0.1:17890"
 Environment="HTTPS_PROXY=http://127.0.0.1:17890"
@@ -92,10 +92,10 @@ Keep the Windows proxy and SSH connection open through all four builds. An SSH r
 After the build script exits successfully:
 
 ```sh
-docker image inspect feishu/headscale:2026.09-rc.1 --format '{{.Id}}'
-docker image inspect feishu/headplane:2026.09-rc.1 --format '{{.Id}}'
-docker image inspect feishu/casdoor:2026.09-rc.1 --format '{{.Id}}'
-docker image inspect feishu/sync:2026.09-rc.1 --format '{{.Id}}'
+docker image inspect tailnet/headscale:2026.09-rc.1 --format '{{.Id}}'
+docker image inspect tailnet/headplane:2026.09-rc.1 --format '{{.Id}}'
+docker image inspect tailnet/casdoor:2026.09-rc.1 --format '{{.Id}}'
+docker image inspect tailnet/sync:2026.09-rc.1 --format '{{.Id}}'
 ```
 
 Also pull the deployment's PostgreSQL and Caddy images while the daemon proxy is available if direct registry access is unavailable. Use the exact references from `.runtime/compose.env`.
@@ -105,7 +105,7 @@ Also pull the deployment's PostgreSQL and Caddy images while the daemon proxy is
 The mirror-host exclusions saved in `daemon.json` can remain after the tunnel is removed. Once required images are available, remove only this recipe's runtime drop-in and restart Docker at an appropriate time:
 
 ```sh
-sudo rm /run/systemd/system/docker.service.d/90-feishu-tunnel-proxy.conf
+sudo rm /run/systemd/system/docker.service.d/90-tailnet-tunnel-proxy.conf
 sudo systemctl daemon-reload
 sudo systemctl restart docker
 ```

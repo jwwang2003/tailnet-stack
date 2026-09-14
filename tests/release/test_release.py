@@ -80,6 +80,18 @@ class OfflineDistributionChecks(unittest.TestCase):
     def test_no_registry_digests_required_for_verified_offline_images(self):
         release.check_offline_images(self.lock,self.manifest,b'lock',self.bundle)
 
+    def test_neutral_and_legacy_aliases_require_matching_content_ids(self):
+        for namespace in ('tailnet', 'feishu'):
+            for key, item in self.bundle['images'].items():
+                alias = f"offline/{namespace}-{key.replace('_', '-')}:sha256-" + 'c' * 64
+                item['alias'] = self.manifest['images'][key] = alias
+            release.check_offline_images(self.lock, self.manifest, b'lock', self.bundle)
+            item = self.bundle['images']['headscale']
+            item['alias'] = item['alias'].replace('c' * 64, 'd' * 64)
+            self.manifest['images']['headscale'] = item['alias']
+            with self.assertRaisesRegex(ValueError, 'alias differs'):
+                release.check_offline_images(self.lock, self.manifest, b'lock', self.bundle)
+
     def test_altered_bundle_or_missing_image_rejected(self):
         for mutation in ('archive','revision','platform','missing'):
             bundle=copy.deepcopy(self.bundle)

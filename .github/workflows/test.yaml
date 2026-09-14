@@ -17,5 +17,5 @@ jobs:
       - run: bash scripts/test.sh
       - name: Validate generated Compose configuration
         run: |
-          python scripts/configure.py --site deploy/site.example.json --output "$RUNNER_TEMP/feishu-runtime"
-          docker compose --env-file "$RUNNER_TEMP/feishu-runtime/compose.env" -f deploy/compose.yaml --profile '*' config --quiet
+          python scripts/configure.py --site deploy/site.example.json --output "$RUNNER_TEMP/tailnet-runtime"
+          docker compose --env-file "$RUNNER_TEMP/tailnet-runtime/compose.env" -f deploy/compose.yaml --profile '*' config --quiet

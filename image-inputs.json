@@ -2,7 +2,7 @@
   "schema_version": 1,
   "platform": "linux/amd64",
   "images": {
-    "sync": "feishu/sync:2026.09-rc.1",
+    "sync": "tailnet/sync:2026.09-rc.1",
     "database": "postgres:17.6-alpine",
     "reverse_proxy": "caddy:2.10.2-alpine"
   }

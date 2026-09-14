@@ -6,8 +6,8 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download && go mod verify
 COPY . .
-ARG HEADSCALE_VERSION=v0.29.3-feishu.1
-RUN CGO_ENABLED=0 go build -trimpath -ldflags "-X main.version=${HEADSCALE_VERSION}" -o /out/headscale ./cmd/headscale
+ARG HEADSCALE_VERSION=v0.29.3-integrated.1
+RUN CGO_ENABLED=0 go build -trimpath -ldflags "-X github.com/juanfont/headscale/hscontrol/types.VersionOverride=${HEADSCALE_VERSION}" -o /out/headscale ./cmd/headscale
 
 FROM ${RUNTIME_IMAGE}
 COPY --from=builder /out/headscale /usr/local/bin/headscale

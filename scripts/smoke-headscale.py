@@ -28,7 +28,7 @@ def main():
     parser.add_argument('--binary', required=True, type=Path)
     args = parser.parse_args()
     binary = str(args.binary.resolve())
-    with tempfile.TemporaryDirectory(prefix='feishu-headscale-smoke-') as temp:
+    with tempfile.TemporaryDirectory(prefix='tailnet-headscale-smoke-') as temp:
         root = configure.render(json.loads((ROOT / 'deploy/site.example.json').read_text()), temp)
         port = free_port()
         issuer = f'http://127.0.0.1:{port}/oidc'

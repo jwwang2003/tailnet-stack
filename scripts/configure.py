@@ -92,10 +92,10 @@ frontendBaseDir = "./web/build"
     if not policy.exists():
         write_private(policy, json.dumps({'groups': {}, 'acls': []}, indent=2) + '\n')
     env = {
-        'COMPOSE_PROJECT_NAME': 'feishu-tailnet', 'RUNTIME_DIR': str(output), 'RUN_UID': str(os.getuid()), 'RUN_GID': str(os.getgid()),
+        'COMPOSE_PROJECT_NAME': 'integrated-tailnet', 'RUNTIME_DIR': str(output), 'RUN_UID': str(os.getuid()), 'RUN_GID': str(os.getgid()),
         'CASDOOR_HOST': site['casdoor_host'], 'HEADSCALE_HOST': site['headscale_host'], 'HEADPLANE_HOST': site['headplane_host'],
-        'HEADSCALE_IMAGE': 'feishu/headscale:2026.09-rc.1', 'HEADPLANE_IMAGE': 'feishu/headplane:2026.09-rc.1',
-        'CASDOOR_IMAGE': 'feishu/casdoor:2026.09-rc.1', 'POSTGRES_IMAGE': inputs['images']['database'],
+        'HEADSCALE_IMAGE': 'tailnet/headscale:2026.09-rc.1', 'HEADPLANE_IMAGE': 'tailnet/headplane:2026.09-rc.1',
+        'CASDOOR_IMAGE': 'tailnet/casdoor:2026.09-rc.1', 'POSTGRES_IMAGE': inputs['images']['database'],
         'CADDY_IMAGE': inputs['images']['reverse_proxy'], 'WORKER_IMAGE': inputs['images']['sync']
     }
     # Preserve operator image digest pins on rerender.

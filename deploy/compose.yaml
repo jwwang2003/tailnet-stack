@@ -1,4 +1,4 @@
-name: feishu-tailnet
+name: integrated-tailnet
 services:
   db:
     image: ${POSTGRES_IMAGE:?Set POSTGRES_IMAGE}
@@ -71,7 +71,7 @@ services:
       - caddy_data:/data
       - caddy_config:/config
   worker:
-    image: ${WORKER_IMAGE:-feishu/sync:2026.09-rc.1}
+    image: ${WORKER_IMAGE:-tailnet/sync:2026.09-rc.1}
     profiles: [sync]
     restart: unless-stopped
     user: "${RUN_UID}:${RUN_GID}"

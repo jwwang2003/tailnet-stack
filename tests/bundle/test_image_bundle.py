@@ -127,6 +127,24 @@ class BundleTests(unittest.TestCase):
         bundle.use_bundle(self.import_args)
         self.assertEqual(len(list(self.runtime.glob('compose.env.backup-*'))), 1)
 
+    def test_neutral_export_and_legacy_alias_import_keep_source_binding(self):
+        manifest = self.export()
+        for key, item in manifest['images'].items():
+            self.assertTrue(item['alias'].startswith('offline/tailnet-'))
+            item['alias'] = item['alias'].replace('offline/tailnet-', 'offline/feishu-')
+        self.write_manifest(manifest)
+        self.docker.images.clear()
+        bundle.use_bundle(self.import_args)
+        self.import_args.action = 'check'
+        bundle.use_bundle(self.import_args)
+        self.assertIn('HEADSCALE_IMAGE=offline/feishu-headscale:', self.env.read_text())
+        manifest['integration_commit'] = 'f' * 40
+        self.write_manifest(manifest)
+        self.docker.calls.clear()
+        with self.assertRaisesRegex(ValueError, 'source binding mismatch'):
+            bundle.use_bundle(self.import_args)
+        self.assertEqual(self.docker.calls, [])
+
     def test_podman_export_uses_docker_multi_image_archive_and_normalizes_ids(self):
         self.export_args.engine = 'podman'
         self.export_args.pull_supporting_images = True
@@ -162,7 +180,7 @@ class BundleTests(unittest.TestCase):
             self.export()
 
     def test_export_rejects_missing_wrong_platform_or_revision_images(self):
-        reference = 'feishu/headscale:2026.09-rc.1'
+        reference = 'tailnet/headscale:2026.09-rc.1'
         image = copy.deepcopy(self.docker.images[reference])
         for mutation in ('missing', 'platform', 'revision'):
             with self.subTest(mutation=mutation):
