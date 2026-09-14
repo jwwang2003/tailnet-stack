@@ -121,5 +121,6 @@ else: sys.exit(9)
         self.assertEqual(len(builds), 4)
         for build in builds:
             self.assertNotIn('--load', build['args'])
+            self.assertEqual(build['args'][build['args'].index('--ulimit')+1], 'nofile=65536:65536')
             self.assertEqual(build['args'][build['args'].index('--format')+1], 'docker')
             self.assertIn('FROM docker.io/library/', build['recipe'])

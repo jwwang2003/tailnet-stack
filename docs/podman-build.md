@@ -47,6 +47,7 @@ The script:
 - Checks rootless UID/GID mappings before pulling images.
 - Generates temporary build recipes with fully qualified Docker Hub references, e.g. `docker.io/library/golang:1.26.5`. It does not edit `/etc/containers/registries.conf` or the clean product checkouts.
 - Supplies the platform arguments required by the pinned recipes.
+- Sets `--ulimit nofile=65536:65536` for build steps so Vite can resolve dependencies without exhausting the default Buildah file-descriptor limit.
 - Uses native `podman build --format docker --layers`; it does not pass Docker Buildx's `--load` or require a Docker daemon.
 - Preserves source-revision labels needed by bundle verification.
 
@@ -96,3 +97,17 @@ Remote import/check deliberately uses Docker; `--engine podman` applies only to 
 The current workstation passed a real rootless Podman scratch-image build and multi-image Docker archive export. Inspection of the archive confirmed both saved config digests equal their original image IDs. Unit tests cover Podman selection, qualified build recipes, raw-ID normalization, archive flags, and the Podman-export/Docker-import command boundary.
 
 This smoke test does not claim a completed build of all four applications or a live load on the remote Docker daemon; the build and import commands above are still the live acceptance steps.
+
+## Vite reports a dependency missing although it is installed
+
+On this workstation, Casdoor's frontend failed to resolve `html-parse-stringify`
+during a Podman build even though the package and its module entry point existed
+in the cached image. Running the same frontend build in a normal container passed.
+The measured open-file limit was 1024 for Buildah RUN steps versus 1048576 for
+normal containers. Rebuilding the FRONT stage with `--ulimit nofile=65536:65536`
+passed, including Vite and the postbuild step, without changing dependencies.
+
+The script now sets that limit for Podman builds. Update the integration checkout
+and rerun the same build/export command. Do not externalize the missing import or
+change the lockfile based solely on that error. An unrelated peer-dependency
+warning does not identify the cause of this failure.

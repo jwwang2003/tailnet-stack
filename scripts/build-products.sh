@@ -37,7 +37,8 @@ else
       fi
     done
   fi
-  build_flags+=(--format docker --layers)
+  # Buildah defaults to 1024 open files here; Vite can misreport EMFILE as missing imports.
+  build_flags+=(--format docker --layers --ulimit nofile=65536:65536)
   build_flags+=(--build-arg "BUILDPLATFORM=$build_platform" --build-arg "TARGETPLATFORM=$build_platform"
     --build-arg "TARGETOS=linux" --build-arg "TARGETARCH=${build_platform#linux/}")
 fi
