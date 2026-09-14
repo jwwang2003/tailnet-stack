@@ -1,0 +1,27 @@
+{
+  "feishu": {
+    "base_url": "https://open.feishu.cn",
+    "app_id": "cli_REPLACE_ME",
+    "app_secret_file": "/run/secrets/feishu_app_secret",
+    "tenant_key": "REPLACE_WITH_EXPECTED_TENANT",
+    "root_department_ids": ["0"],
+    "group_ids": ["REPLACE_WITH_CONTACT_GROUP_ID"]
+  },
+  "casdoor": {
+    "base_url": "http://casdoor:8000",
+    "organization": "employees",
+    "client_id": "REPLACE_WITH_SYNC_CLIENT_ID",
+    "client_secret_file": "/run/secrets/casdoor_sync_client_secret",
+    "native_syncer_id": "admin/feishu"
+  },
+  "allow_group_id": "REPLACE_WITH_CONTACT_GROUP_ID",
+  "allowed_department_ids": [],
+  "admission_group": "tailnet-members",
+  "headplane_role_groups": {},
+  "state_file": "/state/sync-state.json",
+  "interval_seconds": 300,
+  "missing_confirmations": 2,
+  "allow_reenable": false,
+  "http_timeout_seconds": 30,
+  "http_attempts": 3
+}
