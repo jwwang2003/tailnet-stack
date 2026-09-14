@@ -97,7 +97,8 @@ frontendBaseDir = "./web/build"
         'HEADSCALE_IMAGE': 'tailnet/headscale:2026.09-rc.1', 'HEADPLANE_IMAGE': 'tailnet/headplane:2026.09-rc.1',
         'CASDOOR_IMAGE': 'tailnet/casdoor:2026.09-rc.1', 'POSTGRES_IMAGE': inputs['images']['database'],
         'CADDY_IMAGE': inputs['images']['reverse_proxy'], 'WORKER_IMAGE': inputs['images']['sync'],
-        'HEADPLANE_ORGANIZATION_NAME': '', 'HEADPLANE_ORGANIZATION_LOGO_URL': ''
+        'HEADPLANE_ORGANIZATION_NAME': '', 'HEADPLANE_ORGANIZATION_LOGO_URL': '',
+        'HEADPLANE_ORGANIZATION_NAME_EN': '', 'HEADPLANE_ORGANIZATION_NAME_ZH': ''
     }
     # Preserve operator image digest pins on rerender.
     env_path = output / 'compose.env'

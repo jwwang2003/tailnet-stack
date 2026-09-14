@@ -147,7 +147,9 @@ its Feishu-specific reconciliation steps apply only to that adapter.
 After rendering, set these optional values in `.runtime/compose.env`:
 
 ```dotenv
-HEADPLANE_ORGANIZATION_NAME='飞捷科思 · Fysics'
+HEADPLANE_ORGANIZATION_NAME='Fysics'
+HEADPLANE_ORGANIZATION_NAME_EN='Headplane Fysics'
+HEADPLANE_ORGANIZATION_NAME_ZH='Headplane 飞捷科思'
 HEADPLANE_ORGANIZATION_LOGO_URL='https://assets.example.com/fysics-logo.svg'
 ```
 
@@ -158,3 +160,7 @@ require rebuilding the image. The name replaces the header title and browser-tab
 title; the logo replaces the H mark. Unset, invalid or unavailable logos use the
 original mark. A root-relative image path served by your proxy is also supported;
 this setting does not upload or expose a file from the host filesystem.
+
+The optional `_NAME_EN` / `_NAME_ZH` settings select the English/Chinese header and
+browser-tab names immediately when language changes. Missing overrides fall back
+to `HEADPLANE_ORGANIZATION_NAME`.
