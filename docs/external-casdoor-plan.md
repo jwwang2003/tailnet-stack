@@ -3,6 +3,16 @@
 Planning baseline: Tailnet Stack `1c97bb5`. This is a work assignment and acceptance
 plan, not evidence that external mode exists or that a deployment is approved.
 
+## Implementation status
+
+The shared contract and Waves 1–2 have been implemented and reviewed. Local
+acceptance includes 265 tests, three-mode Compose/Caddy configuration checks,
+filesystem recovery, and an actual three-image external Podman bundle. Wave 3
+live OIDC, Docker-host recovery and target-platform acceptance remain pending;
+see [development validation](../releases/external-casdoor-development-validation.md).
+The assignments below remain the implementation/review record, not production
+approval. Live identity extraction remains a separate follow-up.
+
 ## Outcome and scope
 
 Deliver a tested choice between bundled Casdoor and an external HTTPS OIDC issuer.

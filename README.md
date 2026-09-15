@@ -27,6 +27,14 @@ suffix selects that candidate's ARM64 image configuration. Deploy the exact
 integration commit matching the images or bundle, rather than a moving `main`.
 Historical Feishu release refs remain available for existing deployments.
 
+## External identity development
+
+`main` implements [external Casdoor mode](docs/external-casdoor.md) alongside
+bundled deployment. The implementation passes local regression, ownership and
+artifact checks; live external-issuer login and deployment-host acceptance are
+still pending. See the [development validation record](releases/external-casdoor-development-validation.md).
+This is separate from the pinned RC4 candidate described below.
+
 ## Release status
 
 `integrated-2026.09.0-rc.4` is a **release candidate, not production-ready**.
