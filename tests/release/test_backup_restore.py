@@ -8,6 +8,8 @@ import tarfile
 import tempfile
 import unittest
 
+import yaml
+
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -144,7 +146,9 @@ if 'pg_dump' in args:
         runtime = self.base / 'runtime'
         runtime.mkdir()
         files = {
-            'compose.env': 'RUNTIME_DIR=' + str(runtime) + '\n',
+            'compose.env': 'RUNTIME_DIR=' + str(runtime) + '\nCASDOOR_HOST=identity.example.com\n',
+            'headscale/config.yaml': 'oidc: {issuer: https://identity.example.com}\n',
+            'headplane/config.yaml': 'oidc: {issuer: https://identity.example.com}\n',
             'headscale/data/db.sqlite': 'tailnet database',
             'headscale/data/noise_private.key': 'tailnet private key',
             'headplane/data/state': 'sessions',
@@ -164,11 +168,10 @@ if 'pg_dump' in args:
             path.write_text(content)
         if not legacy:
             deployment = module.make_deployment(mode, 'https://identity.example.com', owner)
-            configs = {
-                'deploy/compose.yaml': 'services:\n' + ''.join('  ' + name + ': {image: fixture}\n' for name in deployment['services']),
-                'deploy/compose.offline.yaml': 'services: {}\n',
-                'deploy/Caddyfile': '# selected proxy routes\n',
-            }
+            config_spec = importlib.util.spec_from_file_location('recovery_config_fixture', ROOT / 'scripts/configure.py')
+            configure = importlib.util.module_from_spec(config_spec)
+            config_spec.loader.exec_module(configure)
+            configs = configure.deployment_files(deployment)
             for name, content in configs.items():
                 path = runtime / name
                 path.parent.mkdir(parents=True, exist_ok=True)
@@ -341,7 +344,9 @@ if 'pg_dump' in args:
     def test_external_effective_compose_cannot_reintroduce_identity_service(self):
         runtime = self.runtime()
         compose = runtime / 'deploy/compose.yaml'
-        compose.write_text(compose.read_text() + '  casdoor: {image: fixture}\n')
+        config = yaml.safe_load(compose.read_text())
+        config['services']['casdoor'] = {'image': 'fixture'}
+        compose.write_text(yaml.safe_dump(config))
         descriptor = runtime / 'deployment.json'
         data = json.loads(descriptor.read_text())
         data['configuration_sha256']['deploy/compose.yaml'] = hashlib.sha256(compose.read_bytes()).hexdigest()
@@ -359,6 +364,104 @@ if 'pg_dump' in args:
         self.assertFalse(archive.exists())
         restart = self.calls()[-1]
         self.assertEqual(restart[restart.index('start') + 1:], ['headscale', 'proxy', 'worker'])
+
+
+    def test_archive_cannot_restore_into_shared_volumes_or_bind_mounts(self):
+        result, archive = self.run_backup(self.runtime())
+        self.assertEqual(result.returncode, 0, result.stderr)
+        original = archive.read_bytes()
+        for mutation in ('external_volume', 'named_volume', 'driver_volume', 'bind_mount',
+                         'long_mount', 'include', 'extends', 'volumes_from'):
+            with self.subTest(mutation=mutation):
+                archive.write_bytes(original)
+                self.trace.unlink(missing_ok=True)
+                def change(files):
+                    name = 'deploy/compose.yaml'
+                    compose = yaml.safe_load(files['runtime/' + name])
+                    proxy = compose['services']['proxy']
+                    if mutation == 'external_volume':
+                        compose['volumes']['caddy_data'] = {'external': True, 'name': 'shared_casdoor_db'}
+                    elif mutation == 'named_volume':
+                        compose['volumes']['caddy_data'] = {'name': 'shared_casdoor_db'}
+                    elif mutation == 'driver_volume':
+                        compose['volumes']['caddy_data'] = {'driver': 'local', 'driver_opts': {'device': '/shared/identity'}}
+                    elif mutation == 'bind_mount':
+                        proxy['volumes'][1] = '/shared/identity:/data'
+                    elif mutation == 'long_mount':
+                        proxy['volumes'][1] = {'type': 'bind', 'source': '/shared/identity', 'target': '/data'}
+                    elif mutation == 'include':
+                        compose['include'] = ['/shared/identity/compose.yaml']
+                    elif mutation == 'extends':
+                        proxy['extends'] = {'file': '/shared/identity/compose.yaml', 'service': 'casdoor'}
+                    else:
+                        proxy['volumes_from'] = ['container:shared-casdoor']
+                    files['runtime/' + name] = yaml.safe_dump(compose).encode()
+                    descriptor = json.loads(files['runtime/deployment.json'])
+                    descriptor['configuration_sha256'][name] = hashlib.sha256(files['runtime/' + name]).hexdigest()
+                    files['runtime/deployment.json'] = json.dumps(descriptor).encode()
+                    metadata = json.loads(files['metadata.json'])
+                    metadata['deployment'] = descriptor
+                    files['metadata.json'] = json.dumps(metadata).encode()
+                self.rewrite_archive(archive, change)
+                result = self.restore_archive(archive)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(self.destination.exists())
+                self.assertEqual(self.calls(), [])
+
+    def test_runtime_and_archived_issuer_must_match_descriptor(self):
+        runtime = self.runtime()
+        result, archive = self.run_backup(runtime)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.trace.unlink()
+        changed = b'oidc: {issuer: https://wrong.example.com}\n'
+        self.rewrite_archive(archive, lambda files: files.update({'runtime/headscale/config.yaml': changed}))
+        result = self.restore_archive(archive)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('issuer differs', result.stderr)
+        self.assertFalse(self.destination.exists())
+        self.assertEqual(self.calls(), [])
+        archive.unlink()
+        (runtime / 'headscale/config.yaml').write_bytes(changed)
+        result, archive = self.run_backup(runtime)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('issuer differs', result.stderr)
+        self.assertFalse(archive.exists())
+        self.assertEqual(self.calls(), [])
+
+    def test_legacy_backup_restores_a_rerenderable_issuer(self):
+        import importlib.util
+        import shutil
+        spec = importlib.util.spec_from_file_location('legacy_recovery_config', ROOT / 'scripts/configure.py')
+        configure = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(configure)
+        site = json.loads((ROOT / 'deploy/site.example.json').read_text())
+        runtime = self.base / 'runtime'
+        configure.render(site, runtime)
+        (runtime / 'deployment.json').unlink()
+        shutil.rmtree(runtime / 'deploy')
+        result, archive = self.run_backup(runtime)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        result = self.restore_archive(archive, 'bundled')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        restored = self.destination / 'runtime'
+        descriptor = json.loads((restored / 'deployment.json').read_text())
+        self.assertEqual(descriptor['identity']['issuer'], 'https://' + site['casdoor_host'])
+        configure.render(site, restored)
+        self.assertIn('COMPOSE_PROJECT_NAME=restore-test', (restored / 'compose.env').read_text())
+
+
+    def test_restore_rebases_exported_runtime_variables_too(self):
+        result, archive = self.run_backup(self.runtime())
+        self.assertEqual(result.returncode, 0, result.stderr)
+        def change(files):
+            files['runtime/compose.env'] += b'export RUNTIME_DIR=/shared/identity\n RUN_UID = 9999\n'
+        self.rewrite_archive(archive, change)
+        result = self.restore_archive(archive)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        env = (self.destination / 'runtime/compose.env').read_text()
+        self.assertNotIn('/shared/identity', env)
+        self.assertNotIn('9999', env)
+        self.assertNotIn('export RUNTIME_DIR', env)
 
 
 

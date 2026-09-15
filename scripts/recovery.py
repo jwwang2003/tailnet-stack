@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import os
+import re
 from pathlib import Path, PurePosixPath
 import shutil
 import stat
@@ -15,7 +16,7 @@ from urllib.parse import urlsplit
 
 import yaml
 
-from deployment import load_deployment, validate_deployment, verify_configuration
+from deployment import load_deployment, make_deployment, validate_deployment, validate_issuer, verify_configuration
 
 DEPLOY_FILES = ('deploy/compose.yaml', 'deploy/compose.offline.yaml', 'deploy/Caddyfile')
 APP_SECRETS = {'headscale_oidc_secret', 'headplane_oidc_secret', 'headscale_api_key', 'cookie_secret'}
@@ -25,8 +26,30 @@ def checksum(data):
     return hashlib.sha256(data).hexdigest()
 
 
+# These are the persistent mounts supported by the generated deployment.
+SERVICE_MOUNTS = {
+    'db': {'casdoor_db:/var/lib/postgresql/data'},
+    'casdoor': {'${RUNTIME_DIR}/casdoor/app.conf:/conf/app.conf:ro',
+                '${RUNTIME_DIR}/casdoor/logs:/logs', '${RUNTIME_DIR}/casdoor/files:/files'},
+    'headscale': {'${RUNTIME_DIR}/headscale/config.yaml:/etc/headscale/config.yaml:ro',
+                  '${RUNTIME_DIR}/headscale/policy.json:/etc/headscale/policy.json:ro',
+                  '${RUNTIME_DIR}/secrets/headscale_oidc_secret:/run/secrets/oidc_secret:ro',
+                  '${RUNTIME_DIR}/headscale/data:/var/lib/headscale'},
+    'headplane': {'${RUNTIME_DIR}/headplane/config.yaml:/etc/headplane/config.yaml:ro',
+                  '${RUNTIME_DIR}/headplane/data:/var/lib/headplane',
+                  '${RUNTIME_DIR}/secrets/headplane_oidc_secret:/run/secrets/oidc_secret:ro',
+                  '${RUNTIME_DIR}/secrets/headscale_api_key:/run/secrets/headscale_api_key:ro',
+                  '${RUNTIME_DIR}/secrets/cookie_secret:/run/secrets/cookie_secret:ro'},
+    'proxy': {'./Caddyfile:/etc/caddy/Caddyfile:ro', 'caddy_data:/data', 'caddy_config:/config'},
+    'worker': {'${RUNTIME_DIR}/sync:/config:ro', '${RUNTIME_DIR}/sync/state:/state',
+               '${RUNTIME_DIR}/secrets:/run/secrets:ro'},
+}
+SERVICE_FIELDS = {'image', 'restart', 'environment', 'secrets', 'volumes', 'healthcheck',
+                  'user', 'ports', 'security_opt', 'command', 'tmpfs', 'profiles', 'depends_on'}
+
+
 def validate_effective_config(deployment, files):
-    """Ensure hashed Compose files agree with the declared ownership boundary."""
+    """Reject mounts and Compose indirection that could access another deployment."""
     expected = set(deployment['services'])
     external = deployment['identity']['mode'] == 'external'
     for name in DEPLOY_FILES[:2]:
@@ -36,17 +59,80 @@ def validate_effective_config(deployment, files):
         actual = set(config['services'])
         if (name == 'deploy/compose.yaml' and actual != expected) or not actual <= expected:
             raise ValueError('Effective Compose services differ from deployment descriptor: ' + name)
-        if external:
-            if config.get('secrets') or set(config.get('volumes') or {}) - {'caddy_data', 'caddy_config'}:
-                raise ValueError('External Compose contains identity-owned secrets or volumes')
+        if name.endswith('compose.offline.yaml'):
+            if set(config) != {'services'} or any(value != {'pull_policy': 'never'} for value in config['services'].values()):
+                raise ValueError('Offline Compose may only disable image pulls for selected services')
+            continue
+        if set(config) - {'name', 'services', 'volumes', 'secrets'}:
+            raise ValueError('Effective Compose contains unsupported resource indirection')
+        volumes = config.get('volumes')
+        expected_volumes = {'caddy_data', 'caddy_config'} | ({'casdoor_db'} if not external else set())
+        if not isinstance(volumes, dict) or set(volumes) != expected_volumes:
+            raise ValueError('Effective Compose named volumes differ from owned resources')
+        if any(value not in (None, {}) for value in volumes.values()):
+            raise ValueError('Named volume overrides may access an existing or external resource')
+        expected_secrets = {} if external else {'db_password': {'file': '${RUNTIME_DIR}/secrets/db_password'}}
+        if (config.get('secrets') or {}) != expected_secrets:
+            raise ValueError('Effective Compose secrets differ from owned resources')
+        for service, definition in config['services'].items():
+            if not isinstance(definition, dict) or set(definition) - SERVICE_FIELDS:
+                raise ValueError('Effective Compose contains unsupported service indirection: ' + service)
+            mounts = definition.get('volumes', [])
+            if (not isinstance(mounts, list) or not all(isinstance(mount, str) for mount in mounts)
+                    or set(mounts) != SERVICE_MOUNTS[service] or len(mounts) != len(set(mounts))):
+                raise ValueError('Effective Compose mounts differ from owned paths: ' + service)
+            if definition.get('secrets', []) != (['db_password'] if service == 'db' else []):
+                raise ValueError('Effective Compose service secrets differ from owned resources')
+            dependencies = definition.get('depends_on', {})
+            if not isinstance(dependencies, (dict, list)) or not set(dependencies) <= expected:
+                raise ValueError('Effective Compose dependency is not owned by this deployment')
     if external:
         caddy = files['deploy/Caddyfile']
         if isinstance(caddy, bytes):
             caddy = caddy.decode()
-        # The shared issuer owns its hostname and proxy route.
         host = urlsplit(deployment['identity']['issuer']).hostname
         if host in caddy or 'CASDOOR_HOST' in caddy or 'casdoor:8000' in caddy:
             raise ValueError('External proxy cannot route the shared identity hostname')
+
+
+def configured_issuers(files):
+    issuers = []
+    for name in ('headscale/config.yaml', 'headplane/config.yaml'):
+        if name in files:
+            config = yaml.safe_load(files[name])
+            if not isinstance(config, dict) or not isinstance(config.get('oidc'), dict):
+                raise ValueError('Invalid runtime OIDC configuration: ' + name)
+            issuers.append(validate_issuer(config['oidc'].get('issuer')))
+    return issuers
+
+
+def validate_configured_issuer(deployment, files):
+    if not {'headscale/config.yaml', 'headplane/config.yaml'} <= set(files):
+        raise ValueError('Runtime requires both Headscale and Headplane OIDC configurations')
+    if any(issuer != deployment['identity']['issuer'] for issuer in configured_issuers(files)):
+        raise ValueError('Runtime OIDC issuer differs from deployment descriptor')
+
+
+def runtime_identity_files(runtime):
+    return {name: (runtime / name).read_bytes() for name in ('headscale/config.yaml', 'headplane/config.yaml')
+            if (runtime / name).exists()}
+
+
+def legacy_deployment(runtime):
+    """Carry the existing issuer into new archives instead of inventing an identity."""
+    issuers = configured_issuers(runtime_identity_files(runtime))
+    for line in (runtime / 'compose.env').read_text().splitlines():
+        if line.startswith('CASDOOR_HOST='):
+            issuers.append(validate_issuer('https://' + line.split('=', 1)[1]))
+    app = runtime / 'casdoor/app.conf'
+    if app.exists():
+        for line in app.read_text().splitlines():
+            key, separator, value = line.partition('=')
+            if separator and key.strip() in ('origin', 'originFrontend'):
+                issuers.append(validate_issuer(value.strip()))
+    if not issuers or len(set(issuers)) != 1:
+        raise ValueError('Legacy runtime must have one consistent configured OIDC issuer')
+    return make_deployment('bundled', issuers[0])
 
 
 def runtime_deployment(runtime):
@@ -59,10 +145,13 @@ def runtime_deployment(runtime):
             raise ValueError('Deployment descriptor must bind all effective deploy files')
         verify_configuration(runtime, deployment)
         validate_effective_config(deployment, {name: (runtime / name).read_bytes() for name in DEPLOY_FILES})
+        validate_configured_issuer(deployment, runtime_identity_files(runtime))
         return deployment, True
     if (runtime / 'deploy').exists():
         raise ValueError('Effective deploy files require deployment.json')
-    return load_deployment(), False
+    deployment = legacy_deployment(runtime)
+    validate_configured_issuer(deployment, runtime_identity_files(runtime))
+    return deployment, False
 
 
 def inspect_runtime(runtime, source):
@@ -220,6 +309,8 @@ def read_archive(archive, expected_lock, expected_mode=None):
                 if checksum(content('runtime/' + name)) != digest:
                     raise ValueError('Deployment configuration checksum differs: ' + name)
             validate_effective_config(deployment, {name: content('runtime/' + name) for name in DEPLOY_FILES})
+            validate_configured_issuer(deployment, {name: content('runtime/' + name)
+                for name in ('headscale/config.yaml', 'headplane/config.yaml') if 'runtime/' + name in paths})
             if mode == 'external':
                 local_worker = deployment['directory_sync']['owner'] == 'local'
                 # Credential names are derived from the archived worker config below.
@@ -256,9 +347,10 @@ def extract_archive(archive, expected_lock, destination, project, expected_mode)
     replacements = {'RUNTIME_DIR': str(destination / 'runtime'), 'RUN_UID': str(os.getuid()), 'RUN_GID': str(os.getgid()), 'COMPOSE_PROJECT_NAME': project}
     lines, seen = [], set()
     for line in env.read_text().splitlines():
-        key, separator, value = line.partition('=')
+        match = re.match(r'\s*(?:export\s+)?([A-Za-z_][A-Za-z_0-9]*)\s*=', line)
+        key = match[1] if match else None
         seen.add(key)
-        lines.append(key + '=' + replacements[key] if separator and key in replacements else line)
+        lines.append(key + '=' + replacements[key] if key in replacements else line)
     lines.extend(key + '=' + value for key, value in replacements.items() if key not in seen)
     env.write_text('\n'.join(lines) + '\n')
     env.chmod(0o600)
