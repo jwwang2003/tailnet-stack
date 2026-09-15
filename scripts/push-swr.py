@@ -1,7 +1,6 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 """Log in to Huawei SWR with AK/SK and push the six local Docker images."""
 
-import argparse
 import hashlib
 import hmac
 import json
@@ -9,13 +8,20 @@ import os
 from pathlib import Path
 import re
 import subprocess
-import sys
+from typing import Annotated
 
 import yaml
+import typer
+from rich.console import Console
+from rich.table import Table
 
 from release import check_lock, read_yaml
 
 ROOT = Path(__file__).resolve().parents[1]
+app = typer.Typer(add_completion=False, rich_markup_mode="rich",
+                  pretty_exceptions_show_locals=False)
+console = Console(markup=False, highlight=False)
+errors = Console(stderr=True, markup=False, highlight=False)
 
 
 def docker(*args, password=None):
@@ -37,22 +43,20 @@ def inspect(reference):
     return images[0]
 
 
-def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--region", default=os.environ.get("SWR_REGION"),
-                        help="Huawei region, or SWR_REGION; e.g. cn-east-3")
-    parser.add_argument("--organization", default=os.environ.get("SWR_ORG"),
-                        help="Existing SWR organization, or SWR_ORG")
-    parser.add_argument("--tag", help="Destination tag; defaults to release image tag plus architecture")
-    parser.add_argument("--dry-run", action="store_true",
-                        help="Show the upload plan without Docker access or credentials")
-    args = parser.parse_args(argv)
+@app.command()
+def main(
+    region: Annotated[str, typer.Option(envvar="SWR_REGION", help="Huawei region, e.g. cn-east-3")],
+    organization: Annotated[str, typer.Option(envvar="SWR_ORG", help="Existing SWR organization")],
+    tag: Annotated[str | None, typer.Option(help="Destination tag; defaults to release tag plus architecture")] = None,
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Preview without Docker access or credentials")] = False,
+):
+    """Log in to Huawei SWR and upload the six local Docker images."""
     try:
-        if not re.fullmatch(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)+", args.region or ""):
+        if not re.fullmatch(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)+", region or ""):
             raise ValueError("Set --region or SWR_REGION to a Huawei region")
-        if not re.fullmatch(r"[a-z0-9]+(?:[._-][a-z0-9]+)*", args.organization or ""):
+        if not re.fullmatch(r"[a-z0-9]+(?:[._-][a-z0-9]+)*", organization or ""):
             raise ValueError("Set --organization or SWR_ORG to an existing SWR organization")
-        registry = f"swr.{args.region}.myhuaweicloud.com"
+        registry = f"swr.{region}.myhuaweicloud.com"
         if os.environ.get("SWR_REGISTRY", registry) != registry:
             raise ValueError("SWR_REGISTRY does not match --region/SWR_REGION; update or unset it")
         lock = read_yaml(ROOT / "versions.lock.yaml")
@@ -68,23 +72,31 @@ def main(argv=None):
                        caddy=inputs["images"]["reverse_proxy"])
         architecture = platform.split("/")[1]
         release_tag = sources["headscale"].rsplit("/", 1)[-1].partition(":")[2]
-        tag = args.tag or (release_tag if release_tag.endswith("-" + architecture)
+        if "@" in sources["headscale"] and not tag:
+            raise ValueError("Set --tag when the source image is pinned by digest")
+        tag = tag or (release_tag if release_tag.endswith("-" + architecture)
                            else release_tag + "-" + architecture)
-        if (not re.fullmatch(r"[\w][\w.-]{0,127}", tag, flags=re.ASCII)
-                or ("@" in sources["headscale"] and not args.tag)):
+        if not re.fullmatch(r"[\w][\w.-]{0,127}", tag, flags=re.ASCII):
             raise ValueError("Set --tag to a valid Docker tag")
-        targets = {name: f"{registry}/{args.organization}/{name}:{tag}" for name in sources}
+        targets = {name: f"{registry}/{organization}/{name}:{tag}" for name in sources}
+        plan = Table(title=f"SWR upload · {platform}", show_lines=True)
+        plan.add_column("Image", style="cyan", no_wrap=True)
+        plan.add_column("Local source", overflow="fold")
+        plan.add_column("Destination", overflow="fold")
         for name, source in sources.items():
             if not isinstance(source, str) or not source or source.startswith("-") or re.search(r"\s", source):
                 raise ValueError("Invalid source image: " + name)
-            print(f"{source} -> {targets[name]} ({platform})", flush=True)
-        if args.dry_run:
-            return 0
+            plan.add_row(name, source, targets[name])
+        console.print(plan)
+        if dry_run:
+            console.print("Preview only — no login or upload performed.", style="yellow")
+            return
         ak, sk = os.environ.get("HUAWEI_AK"), os.environ.get("HUAWEI_SK")
         if not ak or not sk:
             raise ValueError("Export HUAWEI_AK and HUAWEI_SK before uploading")
         # Check every source before logging in or publishing any image. Tag the
         # inspected image IDs so another build cannot change the selected source.
+        console.print("Checking all six local images…", style="cyan")
         images = {}
         for name, source in sources.items():
             image = inspect(source)
@@ -93,12 +105,14 @@ def main(argv=None):
             if not re.fullmatch(r"sha256:[0-9a-f]{64}", image.get("Id", "")):
                 raise ValueError("Invalid Docker image ID: " + source)
             images[name] = image["Id"]
-        output = ROOT / ".runtime" / "swr-digests" / args.region / args.organization / tag
+        output = ROOT / ".runtime" / "swr-digests" / region / organization / tag
         output.mkdir(parents=True, exist_ok=True)
         password = hmac.new(sk.encode(), ak.encode(), hashlib.sha256).hexdigest()
-        docker("login", "--username", f"{args.region}@{ak}", "--password-stdin",
+        console.print("Logging in to " + registry, style="cyan")
+        docker("login", "--username", f"{region}@{ak}", "--password-stdin",
                registry, password=password + "\n")
-        for name, target in targets.items():
+        for index, (name, target) in enumerate(targets.items(), start=1):
+            console.print(f"[{index}/6] Uploading {name}", style="bold cyan")
             docker("tag", images[name], target)
             docker("push", target)
             image = inspect(target)
@@ -111,13 +125,13 @@ def main(argv=None):
             if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
                 raise ValueError("Invalid registry digest: " + target)
             (output / (name + ".txt")).write_text(digest + "\n")
-            print("Published " + prefix + digest, flush=True)
-        print("All six images uploaded. Registry digests: " + str(output))
-        return 0
+            console.print("Published " + prefix + digest, style="green", soft_wrap=True)
+        console.print("All six images uploaded.", style="bold green")
+        console.print("Registry digests: " + str(output), soft_wrap=True)
     except (ValueError, KeyError, OSError, yaml.YAMLError, subprocess.CalledProcessError) as error:
-        print("SWR upload failed: " + str(error), file=sys.stderr)
-        return 1
+        errors.print("SWR upload failed: " + str(error), style="bold red", soft_wrap=True)
+        raise typer.Exit(code=1) from None
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    app()

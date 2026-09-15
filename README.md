@@ -79,7 +79,26 @@ Feishu is optional. If enabled, read [identity contract](docs/identity-contract.
 | `docs/` | Deployment, operations, identity, and user guidance |
 | `releases/` | Immutable validation and promotion evidence |
 
-Use Python 3.11+ with `requirements-build.txt`. Keep credentials, employee
+Use Python 3.11+ with [uv](https://docs.astral.sh/uv/). Initialize the local
+environment and run the tools with:
+
+```sh
+uv sync --locked
+uv run python scripts/push-swr.py --help
+uv run --locked bash scripts/test.sh
+```
+
+`pyproject.toml` declares dependencies, `uv.lock` pins their versions, and
+`.python-version` selects Python 3.12 for development. uv manages `.venv`.
+The project is a collection of scripts, not an installable Python package;
+the uv project version is tooling metadata, not the deployment release number.
+`requirements-build.txt` is a generated compatibility export for pip-based
+build instructions. After dependency updates, refresh it with
+`uv export --locked --no-hashes --no-dev --no-emit-project -o requirements-build.txt`.
+The development dependency group also retains Podman Compose for local sandbox
+operations; it is not included in the pip build requirements export.
+
+Keep credentials, employee
 records, and runtime state outside Git. Store private release inventories separately;
 commit only sanitized evidence. See [operations](docs/operations.md), the
 [employee handbook](docs/employee-handbook.md), [languages](docs/languages.md),

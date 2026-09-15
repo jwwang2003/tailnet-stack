@@ -1,8 +1,6 @@
-import contextlib
 import hashlib
 import hmac
 import importlib.util
-import io
 import json
 import os
 from pathlib import Path
@@ -13,6 +11,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from typer.testing import CliRunner
+from rich.console import Console
+
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'scripts'))
 spec = importlib.util.spec_from_file_location('push_swr', ROOT / 'scripts/push-swr.py')
@@ -21,6 +22,28 @@ spec.loader.exec_module(swr)
 
 
 class SWRTests(unittest.TestCase):
+    def test_help_and_required_options(self):
+        runner = CliRunner()
+        result = runner.invoke(swr.app, ['--help'])
+        self.assertEqual(result.exit_code, 0, result.output)
+        for option in ['--region', '--organization', '--tag', '--dry-run']:
+            self.assertIn(option, result.output)
+        with patch.dict(os.environ, {}, clear=True):
+            with patch.object(swr.subprocess, 'run') as docker:
+                result = runner.invoke(swr.app, ['--dry-run'])
+                self.assertEqual(result.exit_code, 2)
+                docker.assert_not_called()
+
+    def test_environment_options_and_explicit_region_precedence(self):
+        env = {'SWR_REGION': 'cn-north-4', 'SWR_ORG': 'test-org'}
+        with patch.dict(os.environ, env, clear=True), patch.object(swr.subprocess, 'run') as docker, \
+                patch.object(swr, 'console', Console(width=240, markup=False)):
+            for args, region in [([], 'cn-north-4'), (['--region', 'cn-east-3'], 'cn-east-3')]:
+                result = CliRunner().invoke(swr.app, [*args, '--dry-run'], terminal_width=240)
+                self.assertEqual(result.exit_code, 0, result.output)
+                self.assertIn(f'swr.{region}.myhuaweicloud.com/test-org/', result.output)
+            docker.assert_not_called()
+
     def run_upload(self, *, region='cn-north-4', platform='linux/amd64',
                    missing=False, push_failure=False, bad_digest=False,
                    dry_run=False, credentials=True, registry=None):
@@ -58,13 +81,11 @@ class SWRTests(unittest.TestCase):
                 env.update(HUAWEI_AK='test-ak', HUAWEI_SK='test-secret')
             if registry:
                 env['SWR_REGISTRY'] = registry
-            stdout, stderr = io.StringIO(), io.StringIO()
             with patch.dict(os.environ, env, clear=True), patch.object(swr, 'ROOT', root), \
-                    patch.object(swr.subprocess, 'run', side_effect=command), \
-                    contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-                code = swr.main(['--region', region] + (['--dry-run'] if dry_run else []))
+                    patch.object(swr.subprocess, 'run', side_effect=command):
+                result = CliRunner().invoke(swr.app, ['--region', region] + (['--dry-run'] if dry_run else []))
             digests = {p.name: p.read_text() for p in root.glob('.runtime/swr-digests/**/*.txt')}
-            return code, calls, digests, stdout.getvalue() + stderr.getvalue()
+            return result.exit_code, calls, digests, result.output
 
     def test_region_login_six_images_and_registry_digests(self):
         code, calls, digests, output = self.run_upload()
@@ -103,7 +124,10 @@ class SWRTests(unittest.TestCase):
         self.assertEqual(code, 0, output)
         self.assertFalse(calls)
         self.assertFalse(digests)
-        self.assertEqual(output.count(' -> '), 6)
+        self.assertIn('SWR upload', output)
+        self.assertIn('Preview only', output)
+        for name in ['headscale', 'headplane', 'casdoor', 'sync', 'postgres', 'caddy']:
+            self.assertIn(name, output)
 
     def test_mismatched_registry_and_missing_credentials_fail_before_docker(self):
         for options in [{'registry': 'swr.cn-east-3.myhuaweicloud.com'}, {'credentials': False}]:
