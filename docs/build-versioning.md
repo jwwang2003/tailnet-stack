@@ -174,6 +174,61 @@ in an integration-owned build recipe. Do not silently edit the upstream source
 checkout to change its toolchain. Private registry publication and deployment are
 separate actions from a successful local build.
 
+## Publish Docker images to Huawei SWR
+
+Create an SWR organization and grant your IAM user push access. Export
+`HUAWEI_AK` and `HUAWEI_SK` in the shell running the script; use the original
+access-key pair, not the password copied from a generated login command.
+Environment files are not loaded automatically. Keep them outside Git.
+
+From the integration checkout, preview the six-image upload:
+
+```sh
+python3 scripts/push-swr.py --region cn-east-3 --organization YOUR_ORGANIZATION --dry-run
+```
+
+Then upload:
+
+```sh
+python3 scripts/push-swr.py --region cn-east-3 --organization YOUR_ORGANIZATION
+```
+
+Alternatively export `SWR_REGION` and `SWR_ORG` and run the script without flags.
+The region determines both `swr.REGION.myhuaweicloud.com` and the login username
+`REGION@AK`. An existing `SWR_REGISTRY` must match the selected region. This
+implements Huawei's **general long-term login** using HMAC-SHA256, with the
+derived password supplied to `docker login --password-stdin`. It does not
+generate enhanced/temporary login credentials. Docker retains the login using
+its configured credential store. See
+[Huawei's login procedure](https://support.huaweicloud.com/usermanual-swr/swr_01_1000.html)
+and [Docker login](https://docs.docker.com/reference/cli/docker/login/).
+
+Source names come from `versions.lock.yaml` and `image-inputs.json`; all six
+images must already exist in the selected Docker daemon. Podman and Docker have
+separate image stores: build/load the images into Docker first and ensure their
+tags match those source files. The script checks every image's platform against
+`image-inputs.json` before login or upload. Dry run prints the plan only; it does
+not check local images. No build, pull, or architecture conversion is performed.
+
+Destination repositories are `headscale`, `headplane`, `casdoor`, `sync`,
+`postgres`, and `caddy`. The default destination tag is the Headscale source
+image tag with its architecture suffix, e.g. `2026.09-rc.4-amd64` (an existing
+matching suffix is not repeated). Use `--tag` to select a different destination
+tag. Run from the ARM64 candidate checkout with matching ARM64 images to
+publish for that platform; changing a tag does not change image architecture.
+
+Successful pushes record Docker's registry manifest digests under
+`.runtime/swr-digests/REGION/ORGANIZATION/TAG/COMPONENT.txt`. These are registry
+digests, not the offline image IDs. Uploads stop on the first error; earlier
+successful pushes remain in SWR. Reusing a destination tag can update that tag.
+Record the resulting `repository@sha256:...` references in the release inventory
+and deployment configuration. Uploading alone does not satisfy promotion gates.
+
+SWR Basic has restrictions on OCI manifests. Unlike `podman push`, Docker has no
+`--format v2s2` or `--digestfile` option; the script does not pretend to convert
+image formats. Use compatible Docker image manifests and inspect any rejection
+against [SWR's upload requirements](https://support.huaweicloud.com/intl/zh-cn/usermanual-swr/swr_01_0011.html).
+
 ## Record and promote one complete release
 
 1. Update all three `source_commit` fields and the resulting image references and
