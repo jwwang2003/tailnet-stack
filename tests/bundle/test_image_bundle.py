@@ -504,6 +504,53 @@ class BundleTests(unittest.TestCase):
             else:
                 bundle.use_bundle(self.import_args)
 
+    def test_podman_shared_layer_links_are_validated_without_extraction(self):
+        self.external()
+        manifest = self.export()
+        images = [self.docker.images[item['id']] for item in manifest['images'].values()]
+        archive_path = self.output / 'images.tar'
+        write_archive(archive_path, images, {'shared.tar': b'fixture layer bytes'})
+        with tarfile.open(archive_path, 'a') as archive:
+            for name, kind, target in [('legacy/layer.tar', tarfile.SYMTYPE, '../shared.tar'),
+                                       ('other/layer.tar', tarfile.LNKTYPE, 'shared.tar'),
+                                       ('chain/layer.tar', tarfile.SYMTYPE, '../legacy/layer.tar')]:
+                member = tarfile.TarInfo(name)
+                member.type, member.linkname = kind, target
+                archive.addfile(member)
+        with patch.object(tarfile.TarFile, 'extractall', side_effect=AssertionError('must not extract')), \
+                patch.object(tarfile.TarFile, 'extract', side_effect=AssertionError('must not extract')):
+            bundle.validate_archive_inventory(archive_path, manifest['images'])
+
+    def test_image_archive_rejects_unsafe_links_and_linked_metadata(self):
+        self.external()
+        manifest = self.export()
+        images = [self.docker.images[item['id']] for item in manifest['images'].values()]
+        archive_path = self.output / 'images.tar'
+        cases = [
+            [('bad/layer.tar', tarfile.SYMTYPE, '../../outside.tar')],
+            [('bad/layer.tar', tarfile.LNKTYPE, '../outside.tar')],
+            [('bad/layer.tar', tarfile.SYMTYPE, '/tmp/outside.tar')],
+            [('bad/layer.tar', tarfile.SYMTYPE, '../missing.tar')],
+            [('first.tar', tarfile.SYMTYPE, 'second.tar'), ('second.tar', tarfile.LNKTYPE, 'first.tar')],
+            [('metadata.json', tarfile.SYMTYPE, 'shared.tar')],
+            [('linked.tar', tarfile.SYMTYPE, 'shared.tar'), ('././linked.tar/child.tar', tarfile.LNKTYPE, 'shared.tar')],
+            [('bad/layer.tar', tarfile.SYMTYPE, '../manifest.json')],
+        ]
+        for links in cases:
+            with self.subTest(links=links):
+                write_archive(archive_path, images, {'shared.tar': b'layer bytes'})
+                with tarfile.open(archive_path, 'a') as archive:
+                    for name, kind, target in links:
+                        member = tarfile.TarInfo(name)
+                        member.type, member.linkname = kind, target
+                        archive.addfile(member)
+                manifest['archive']['sha256'] = bundle.digest(archive_path)
+                self.write_manifest(manifest)
+                self.docker.calls.clear()
+                with self.assertRaises(ValueError):
+                    bundle.use_bundle(self.import_args)
+                self.assertEqual(self.docker.calls, [])
+
     def test_import_and_check_do_not_import_yaml(self):
         self.export()
         import builtins

@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import posixpath
 from pathlib import Path
 import re
 import shutil
@@ -195,13 +196,44 @@ def validate_archive_inventory(path, images):
     with tarfile.open(path, 'r:*') as archive:
         members = {}
         for member in archive:
-            name = member.name.removeprefix('./')
+            name = posixpath.normpath(member.name)
             require(name not in members, 'Duplicate archive member: ' + name)
-            require(not Path(name).is_absolute() and '..' not in Path(name).parts and
-                    (member.isfile() or member.isdir()), 'Unsafe image archive member: ' + name)
+            require(not Path(member.name).is_absolute() and '..' not in Path(member.name).parts and
+                    (member.isfile() or member.isdir() or member.issym() or member.islnk()),
+                    'Unsafe image archive member: ' + name)
             members[name] = member
 
+        def resolve_layer(name, visiting=None):
+            visiting = set() if visiting is None else visiting
+            require(name not in visiting and len(visiting) < 256, 'Cyclic archive layer link: ' + name)
+            visiting.add(name)
+            member = members.get(name)
+            require(member is not None, 'Missing archive layer link target: ' + name)
+            if member.issym() or member.islnk():
+                require(name.endswith('.tar') and member.linkname and
+                        not posixpath.isabs(member.linkname), 'Unsafe archive layer link: ' + name)
+                # Symlinks are relative to their containing directory; tar hardlinks
+                # name their target from the archive root. Never extract either here.
+                parent = posixpath.dirname(name) if member.issym() else ''
+                target = posixpath.normpath(posixpath.join(parent, member.linkname))
+                require(target != '..' and not target.startswith('../') and target.endswith('.tar'),
+                        'Archive layer link escapes its layer files: ' + name)
+                return resolve_layer(target, visiting)
+            require(member.isfile(), 'Archive layer link must resolve to a regular file: ' + name)
+            return member
+
+        for name, member in members.items():
+            # A link may not become a directory for another archive member.
+            for parent in Path(name).parents:
+                existing = members.get(str(parent))
+                require(existing is None or existing.isdir(), 'Non-directory archive parent: ' + str(parent))
+            if member.issym() or member.islnk():
+                resolve_layer(name)
+
         def read(name):
+            require(not posixpath.isabs(name) and '..' not in Path(name).parts,
+                    'Unsafe archive metadata path: ' + name)
+            name = posixpath.normpath(name)
             member = members.get(name)
             require(member is not None and member.isfile(), 'Missing archive image metadata: ' + name)
             require(member.size <= 16 * 1024 * 1024, 'Image metadata exceeds size limit')
