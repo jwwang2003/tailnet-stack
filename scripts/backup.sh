@@ -14,24 +14,15 @@ archive=$(realpath -m -- "$2")
 [[ ! -e "$archive" && ! -L "$archive" ]] || { echo 'Backup destination already exists.' >&2; exit 1; }
 [[ "$archive" != "$runtime" && "$archive" != "$runtime/"* ]] || { echo 'Backup must be outside the runtime directory.' >&2; exit 1; }
 [[ -d "$(dirname -- "$archive")" ]] || { echo 'Create the backup parent directory first.' >&2; exit 1; }
-python3 - "$runtime" <<'PY'
-import pathlib, stat, sys
-runtime = pathlib.Path(sys.argv[1])
-values = dict(line.split('=', 1) for line in (runtime / 'compose.env').read_text().splitlines() if '=' in line)
-if values.get('RUNTIME_DIR') != str(runtime):
-    raise SystemExit('compose.env RUNTIME_DIR differs from the requested backup source')
-for path in runtime.rglob('*'):
-    if path.relative_to(runtime).as_posix() == 'headscale/data/headscale.sock':
-        continue
-    mode = path.lstat().st_mode
-    if not (stat.S_ISREG(mode) or stat.S_ISDIR(mode)):
-        raise SystemExit('Runtime contains a link or special file that cannot be safely restored: ' + str(path))
-PY
+selection=$(python3 "$integration_root/scripts/recovery.py" inspect "$runtime" "$integration_root")
+mapfile -t deployment <<< "$selection"
+mode=${deployment[0]}
+read -r -a selected_services <<< "${deployment[2]}"
 command -v docker >/dev/null || { echo 'Docker Compose is required.' >&2; exit 1; }
 command -v flock >/dev/null || { echo 'flock is required.' >&2; exit 1; }
 exec 9>"$runtime/.maintenance.lock"
 flock -n 9 || { echo 'Another backup or maintenance task holds the runtime lock.' >&2; exit 1; }
-compose=(docker compose --env-file "$runtime/compose.env" --file "$integration_root/deploy/compose.yaml" --profile '*')
+compose=(docker compose --env-file "$runtime/compose.env" --file "${deployment[1]}" --profile '*')
 staging=$(mktemp -d "${TMPDIR:-/tmp}/tailnet-backup.XXXXXX")
 partial=$(mktemp "$archive.partial.XXXXXX")
 restart_services=()
@@ -53,37 +44,31 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# Stop only owned writers; remember exactly which ones were running.
+writers=()
+for service in worker headplane headscale casdoor proxy; do
+  for selected in "${selected_services[@]}"; do
+    [[ "$selected" != "$service" ]] || writers+=("$service")
+  done
+done
 running=$("${compose[@]}" ps --services --status running)
 while IFS= read -r service; do
-  case "$service" in worker|headplane|headscale|casdoor|proxy) restart_services+=("$service");; esac
+  for writer in "${writers[@]}"; do
+    [[ "$service" != "$writer" ]] || restart_services+=("$service")
+  done
 done <<< "$running"
 restart_required=true
-"${compose[@]}" stop --timeout 60 worker headplane headscale casdoor proxy
-"${compose[@]}" exec -T db pg_dump --username casdoor --dbname casdoor --format custom > "$staging/database.dump"
-[[ -s "$staging/database.dump" ]] || { echo 'Database dump is empty.' >&2; exit 1; }
-mkdir "$staging/runtime" "$staging/deploy" "$staging/caddy_data" "$staging/caddy_config"
-# A stopped Headscale Unix socket is not persistent state; tar cannot restore it.
-tar --exclude='./headscale/data/headscale.sock' --exclude='./.maintenance.lock' -C "$runtime" -cf - . | tar -C "$staging/runtime" -xf -
-cp -- "$integration_root/deploy/compose.yaml" "$integration_root/deploy/Caddyfile" "$staging/deploy/"
-cp -- "$integration_root/versions.lock.yaml" "$staging/versions.lock.yaml"
+"${compose[@]}" stop --timeout 60 "${writers[@]}"
+if [[ "$mode" == bundled ]]; then
+  "${compose[@]}" exec -T db pg_dump --username casdoor --dbname casdoor --format custom > "$staging/database.dump"
+  [[ -s "$staging/database.dump" ]] || { echo 'Database dump is empty.' >&2; exit 1; }
+fi
+python3 "$integration_root/scripts/recovery.py" stage "$runtime" "$staging" "$integration_root"
 proxy_container=$("${compose[@]}" ps --all --quiet proxy)
 if [[ -n "$proxy_container" ]]; then
   "${compose[@]}" cp proxy:/data/. "$staging/caddy_data/"
   "${compose[@]}" cp proxy:/config/. "$staging/caddy_config/"
 fi
-python3 - "$staging" "$integration_root" <<'PY'
-import hashlib, json, pathlib, subprocess, sys
-stage, source = map(pathlib.Path, sys.argv[1:])
-from datetime import datetime, timezone
-metadata = {
-    'schema_version': 1,
-    'created_at_utc': datetime.now(timezone.utc).isoformat(),
-    'integration_commit': subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'HEAD'], text=True).strip(),
-    'versions_lock_sha256': hashlib.sha256((stage / 'versions.lock.yaml').read_bytes()).hexdigest(),
-    'database_dump_sha256': hashlib.sha256((stage / 'database.dump').read_bytes()).hexdigest(),
-}
-(stage / 'metadata.json').write_text(json.dumps(metadata, indent=2) + '\n')
-PY
 tar -C "$staging" -czf "$partial" .
 chmod 600 "$partial"
 # Atomic no-overwrite publication, even if another process creates the destination.
