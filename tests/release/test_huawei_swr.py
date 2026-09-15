@@ -11,6 +11,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+import yaml
 from typer.testing import CliRunner
 from rich.console import Console
 
@@ -26,7 +27,7 @@ class SWRTests(unittest.TestCase):
         runner = CliRunner()
         result = runner.invoke(swr.app, ['--help'])
         self.assertEqual(result.exit_code, 0, result.output)
-        for option in ['--region', '--organization', '--tag', '--dry-run']:
+        for option in ['--region', '--organization', '--tag', '--image', '--platform', '--dry-run']:
             self.assertIn(option, result.output)
         with patch.dict(os.environ, {}, clear=True):
             with patch.object(swr.subprocess, 'run') as docker:
@@ -46,7 +47,8 @@ class SWRTests(unittest.TestCase):
 
     def run_upload(self, *, region='cn-north-4', platform='linux/amd64',
                    missing=False, push_failure=False, bad_digest=False,
-                   dry_run=False, credentials=True, registry=None):
+                   dry_run=False, credentials=True, registry=None,
+                   args=None, components=None, support_images=None, release_files=True):
         calls = []
         ids = {}
         targets = {}
@@ -61,7 +63,7 @@ class SWRTests(unittest.TestCase):
                     image_id = targets[ref]
                     digests = [] if bad_digest else [ref.rsplit(':', 1)[0] + '@sha256:' + 'f' * 64]
                 else:
-                    image_id = ids.setdefault(ref, 'sha256:' + str(len(ids) + 1) * 64)
+                    image_id = ids.setdefault(ref, f'sha256:{len(ids) + 1:064x}')
                     digests = []
                 data = [{'Id': image_id, 'Os': platform.split('/')[0],
                          'Architecture': platform.split('/')[1], 'RepoDigests': digests}]
@@ -74,8 +76,17 @@ class SWRTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for name in ['versions.lock.yaml', 'image-inputs.json']:
-                shutil.copy(ROOT / name, root / name)
+            if release_files:
+                for name in ['versions.lock.yaml', 'image-inputs.json']:
+                    shutil.copy(ROOT / name, root / name)
+            if components is not None:
+                (root / 'versions.lock.yaml').write_text(yaml.safe_dump({
+                    'schema_version': 1, 'components': components,
+                }))
+            if support_images is not None:
+                (root / 'image-inputs.json').write_text(json.dumps({
+                    'schema_version': 1, 'platform': platform, 'images': support_images,
+                }))
             env = {'PATH': os.environ.get('PATH', ''), 'SWR_ORG': 'test-org'}
             if credentials:
                 env.update(HUAWEI_AK='test-ak', HUAWEI_SK='test-secret')
@@ -83,11 +94,14 @@ class SWRTests(unittest.TestCase):
                 env['SWR_REGISTRY'] = registry
             with patch.dict(os.environ, env, clear=True), patch.object(swr, 'ROOT', root), \
                     patch.object(swr.subprocess, 'run', side_effect=command):
-                result = CliRunner().invoke(swr.app, ['--region', region] + (['--dry-run'] if dry_run else []))
+                result = CliRunner().invoke(
+                    swr.app,
+                    ['--region', region, *(args or [])] + (['--dry-run'] if dry_run else []),
+                )
             digests = {p.name: p.read_text() for p in root.glob('.runtime/swr-digests/**/*.txt')}
             return result.exit_code, calls, digests, result.output
 
-    def test_region_login_six_images_and_registry_digests(self):
+    def test_region_login_default_images_and_registry_digests(self):
         code, calls, digests, output = self.run_upload()
         self.assertEqual(code, 0, output)
         login = next((argv, kw) for argv, kw in calls if argv[1] == 'login')
@@ -143,7 +157,76 @@ class SWRTests(unittest.TestCase):
                 self.assertEqual(code, 1)
                 self.assertEqual(len([a for a, _ in calls if a[1] == 'push']), 1)
                 self.assertFalse(digests)
-                self.assertNotIn('All six images uploaded', output)
+                self.assertNotRegex(output, r'Uploaded \d+ image')
+
+    def test_custom_images_work_without_release_files(self):
+        for count in [1, 2]:
+            with self.subTest(count=count):
+                args = ['--platform', 'linux/amd64']
+                for index in range(count):
+                    args += ['--image', f'app-{index}=local/app-{index}:v{index}']
+                code, calls, digests, output = self.run_upload(args=args, release_files=False)
+                self.assertEqual(code, 0, output)
+                pushes = [a[-1] for a, _ in calls if a[1] == 'push']
+                self.assertEqual(pushes, [
+                    f'swr.cn-north-4.myhuaweicloud.com/test-org/app-{i}:v{i}-amd64'
+                    for i in range(count)
+                ])
+                self.assertEqual(len(digests), count)
+                self.assertIn(f'Uploaded {count} image(s).', output)
+                self.assertIn(f'[{count}/{count}]', output)
+
+    def test_release_discovery_accepts_different_components_and_support_images(self):
+        components = {f'app-{i}': {'image': f'local/app-{i}:v1'} for i in range(5)}
+        code, calls, digests, output = self.run_upload(
+            components=components,
+            support_images={'cache': 'redis:7', 'database': 'postgres:17'},
+        )
+        self.assertEqual(code, 0, output)
+        self.assertEqual(len([a for a, _ in calls if a[1] == 'push']), 7)
+        self.assertEqual(set(digests), {*(f'app-{i}.txt' for i in range(5)), 'cache.txt', 'postgres.txt'})
+        self.assertIn('Uploaded 7 image(s).', output)
+
+    def test_tag_override_and_arm64_platform(self):
+        code, calls, _, output = self.run_upload(
+            platform='linux/arm64', release_files=False,
+            args=['--platform', 'linux/arm64', '--tag', 'release-arm64',
+                  '--image', 'api=local/api@sha256:' + 'a' * 64,
+                  '--image', 'cache=redis'],
+        )
+        self.assertEqual(code, 0, output)
+        pushes = [a[-1] for a, _ in calls if a[1] == 'push']
+        self.assertEqual(len(pushes), 2)
+        self.assertTrue(all(value.endswith(':release-arm64') for value in pushes))
+
+    def test_invalid_or_duplicate_custom_images_fail_before_docker(self):
+        cases = [
+            ['--image', 'redis:7'],
+            ['--image', '../escape=redis:7'],
+            ['--image', 'cache='],
+            ['--image', 'cache=redis:7', '--image', 'cache=redis:8'],
+            ['--image', 'cache=redis'],
+            ['--image', 'cache=redis@sha256:' + 'a' * 64],
+        ]
+        for args in cases:
+            with self.subTest(args=args):
+                code, calls, _, output = self.run_upload(
+                    args=['--platform', 'linux/amd64', *args], release_files=False,
+                )
+                self.assertEqual(code, 1, output)
+                self.assertFalse(calls)
+
+    def test_empty_release_or_alias_collision_is_rejected(self):
+        for components, support in [
+            ({}, {}),
+            ({'postgres': {'image': 'postgres:17'}}, {'database': 'postgres:18'}),
+        ]:
+            with self.subTest(components=components):
+                code, calls, _, output = self.run_upload(
+                    components=components, support_images=support,
+                )
+                self.assertEqual(code, 1, output)
+                self.assertFalse(calls)
 
 
 if __name__ == '__main__':

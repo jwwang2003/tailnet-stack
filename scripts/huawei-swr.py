@@ -15,7 +15,7 @@ import yaml
 from rich.console import Console
 from rich.table import Table
 
-from release import check_lock, read_yaml
+from release import read_yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 app = typer.Typer(
@@ -66,27 +66,52 @@ def resolve_registry(region: str, organization: str) -> str:
     return registry
 
 
-def load_sources() -> tuple[str, dict[str, str]]:
-    """Read the platform and six image references from the release files."""
-    lock = read_yaml(ROOT / "versions.lock.yaml")
-    check_lock(lock)
+def load_sources(
+    images: list[str] | None = None,
+    platform: str | None = None,
+) -> tuple[str, dict[str, str]]:
+    """Use explicit images when supplied; otherwise discover the release images."""
+    inputs = {}
+    if not images or platform is None:
+        inputs = json.loads((ROOT / "image-inputs.json").read_text())
+        if not isinstance(inputs, dict) or inputs.get("schema_version") != 1:
+            raise ValueError("Invalid schema in image-inputs.json")
 
-    inputs = json.loads((ROOT / "image-inputs.json").read_text())
-    platform = inputs.get("platform")
-    if inputs.get("schema_version") != 1 or platform not in ("linux/amd64", "linux/arm64"):
-        raise ValueError("Invalid platform/schema in image-inputs.json")
+    platform = platform or inputs.get("platform")
+    if platform not in ("linux/amd64", "linux/arm64"):
+        raise ValueError("Platform must be linux/amd64 or linux/arm64")
 
-    sources = {
-        name: lock["components"][name]["image"]
-        for name in ("headscale", "headplane", "casdoor")
-    }
-    sources.update(
-        sync=inputs["images"]["sync"],
-        postgres=inputs["images"]["database"],
-        caddy=inputs["images"]["reverse_proxy"],
-    )
+    entries = []
+    if images:
+        for image in images:
+            name, separator, source = image.partition("=")
+            if not separator:
+                raise ValueError("Use --image REPOSITORY=LOCAL_IMAGE")
+            entries.append((name, source))
+    else:
+        lock = read_yaml(ROOT / "versions.lock.yaml")
+        components = lock.get("components")
+        if lock.get("schema_version") != 1 or not isinstance(components, dict):
+            raise ValueError("Invalid components/schema in versions.lock.yaml")
+        for name, component in components.items():
+            if not isinstance(component, dict):
+                raise ValueError(f"Invalid component: {name}")
+            entries.append((name, component.get("image")))
 
-    for name, source in sources.items():
+        support_images = inputs.get("images")
+        if not isinstance(support_images, dict):
+            raise ValueError("Invalid images in image-inputs.json")
+        # Preserve the repository names used by existing deployments.
+        aliases = {"database": "postgres", "reverse_proxy": "caddy"}
+        entries.extend((aliases.get(name, name), source) for name, source in support_images.items())
+
+    sources = {}
+    for name, source in entries:
+        # Repository names also become digest filenames; disallow path separators.
+        if not isinstance(name, str) or not re.fullmatch(r"[a-z0-9]+(?:[._-][a-z0-9]+)*", name):
+            raise ValueError(f"Invalid destination repository: {name}")
+        if name in sources:
+            raise ValueError(f"Duplicate destination repository: {name}")
         if (
             not isinstance(source, str)
             or not source
@@ -94,6 +119,10 @@ def load_sources() -> tuple[str, dict[str, str]]:
             or re.search(r"\s", source)
         ):
             raise ValueError(f"Invalid source image: {name}")
+        sources[name] = source
+
+    if not sources:
+        raise ValueError("No images selected for upload")
     return platform, sources
 
 
@@ -104,6 +133,8 @@ def resolve_tag(source: str, platform: str, tag: str | None) -> str:
             raise ValueError("Set --tag when the source image is pinned by digest")
 
         tag = source.rsplit("/", 1)[-1].partition(":")[2]
+        if not tag:
+            raise ValueError("Set --tag when the source image has no explicit tag")
         architecture = platform.split("/")[1]
         if not tag.endswith(f"-{architecture}"):
             tag = f"{tag}-{architecture}"
@@ -126,7 +157,7 @@ def show_plan(platform: str, sources: dict[str, str], targets: dict[str, str]) -
 
 def check_local_images(sources: dict[str, str], platform: str) -> dict[str, str]:
     """Validate every source before login and retain the inspected image IDs."""
-    console.print("Checking all six local images…", style="cyan")
+    console.print(f"Checking {len(sources)} local image(s)…", style="cyan")
     image_ids = {}
 
     for name, source in sources.items():
@@ -191,7 +222,15 @@ def main(
     ],
     tag: Annotated[
         str | None,
-        typer.Option(help="Destination tag; defaults to release tag plus architecture"),
+        typer.Option(help="Override all destination tags; defaults to each source tag plus architecture"),
+    ] = None,
+    images: Annotated[
+        list[str] | None,
+        typer.Option("--image", help="REPOSITORY=LOCAL_IMAGE; repeat to replace the default upload set"),
+    ] = None,
+    platform: Annotated[
+        str | None,
+        typer.Option(help="Expected linux/amd64 or linux/arm64; defaults to image-inputs.json"),
     ] = None,
     dry_run: Annotated[
         bool,
@@ -201,10 +240,10 @@ def main(
     """Log in to Huawei SWR and upload the local Docker images."""
     try:
         registry = resolve_registry(region, organization)
-        platform, sources = load_sources()
-        tag = resolve_tag(sources["headscale"], platform, tag)
+        platform, sources = load_sources(images, platform)
+        tags = {name: resolve_tag(source, platform, tag) for name, source in sources.items()}
         targets = {
-            name: f"{registry}/{organization}/{name}:{tag}"
+            name: f"{registry}/{organization}/{name}:{tags[name]}"
             for name in sources
         }
         show_plan(platform, sources, targets)
@@ -220,8 +259,9 @@ def main(
             raise ValueError("Export HUAWEI_AK and HUAWEI_SK before uploading")
 
         image_ids = check_local_images(sources, platform)
-        output = ROOT / ".runtime" / "swr-digests" / region / organization / tag
-        output.mkdir(parents=True, exist_ok=True)
+        output = ROOT / ".runtime" / "swr-digests" / region / organization
+        for image_tag in set(tags.values()):
+            (output / image_tag).mkdir(parents=True, exist_ok=True)
         login(region, registry, access_key, secret_key)
 
         for index, (name, target) in enumerate(targets.items(), start=1):
@@ -229,11 +269,11 @@ def main(
             digest = publish_image(image_ids[name], target)
 
             # Save each successful push even if a later upload fails.
-            (output / f"{name}.txt").write_text(digest + "\n")
+            (output / tags[name] / f"{name}.txt").write_text(digest + "\n")
             repository = target.rsplit(":", 1)[0]
             console.print(f"Published {repository}@{digest}", style="green", soft_wrap=True)
 
-        console.print("All six images uploaded.", style="bold green")
+        console.print(f"Uploaded {len(targets)} image(s).", style="bold green")
         console.print(f"Registry digests: {output}", soft_wrap=True)
     except (ValueError, KeyError, OSError, yaml.YAMLError, subprocess.CalledProcessError) as error:
         errors.print(f"SWR upload failed: {error}", style="bold red", soft_wrap=True)

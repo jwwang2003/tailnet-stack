@@ -185,7 +185,7 @@ Environment files are not loaded automatically. Keep them outside Git; use
 `uv run --env-file .env python scripts/huawei-swr.py ...` to load one explicitly.
 Run `uv sync --locked` first to install Typer, Rich, and PyYAML into `.venv`.
 
-From the integration checkout, preview the six-image upload:
+From the integration checkout, preview the configured images:
 
 ```sh
 uv run python scripts/huawei-swr.py --region cn-east-3 --organization YOUR_ORGANIZATION --dry-run
@@ -196,6 +196,24 @@ Then upload:
 ```sh
 uv run python scripts/huawei-swr.py --region cn-east-3 --organization YOUR_ORGANIZATION
 ```
+
+To upload a custom set, repeat `--image REPOSITORY=LOCAL_IMAGE`. Supplying any
+`--image` options replaces the default set, so you can upload one image or any
+number of images without editing the release files:
+
+```sh
+uv run --env-file .env python scripts/huawei-swr.py \
+  --region cn-east-3 --organization YOUR_ORGANIZATION \
+  --platform linux/amd64 \
+  --image api=local/api:v2 \
+  --image cache=redis:7 \
+  --dry-run
+```
+
+Remove `--dry-run` to upload. With both `--image` and `--platform`, the command
+does not read the release files. Destination repository names must be unique,
+lowercase names without slashes. Region and organization remain required through
+flags or environment variables.
 
 Alternatively export `SWR_REGION` and `SWR_ORG` and run the script without flags.
 Typer provides formatted help and validates options; Rich displays the image
@@ -212,18 +230,29 @@ its configured credential store. See
 [Huawei's login procedure](https://support.huaweicloud.com/usermanual-swr/swr_01_1000.html)
 and [Docker login](https://docs.docker.com/reference/cli/docker/login/).
 
-Source names come from `versions.lock.yaml` and `image-inputs.json`; all six
-images must already exist in the selected Docker daemon. Podman and Docker have
+Without `--image`, source names are discovered from every entry in
+`versions.lock.yaml`'s `components` and `image-inputs.json`'s `images`. There is
+no fixed component list or image count. The existing supporting-image keys
+`database` and `reverse_proxy` retain their destination names `postgres` and
+`caddy`; other keys are used as repository names. Duplicate destinations and
+empty upload sets are rejected.
+
+All selected images must already exist in the selected Docker daemon. Podman and Docker have
 separate image stores: build/load the images into Docker first and ensure their
-tags match those source files. The script checks every image's platform against
-`image-inputs.json` before login or upload. Dry run prints the plan only; it does
+tags match the selected sources. The script checks every image's platform against
+`--platform` (or `image-inputs.json` when omitted) before login or upload.
+Supported platforms are `linux/amd64` and `linux/arm64`.
+Dry run prints the plan only; it does
 not check local images. No build, pull, or architecture conversion is performed.
 
-Destination repositories are `headscale`, `headplane`, `casdoor`, `sync`,
-`postgres`, and `caddy`. The default destination tag is the Headscale source
-image tag with its architecture suffix, e.g. `2026.09-rc.4-amd64` (an existing
-matching suffix is not repeated). Use `--tag` to select a different destination
-tag. Run from the ARM64 candidate checkout with matching ARM64 images to
+Each destination uses its own source tag with the architecture suffix, e.g.
+`local/api:v2` becomes `api:v2-amd64` and `redis:7` becomes `cache:7-amd64`
+in the example above. An existing matching suffix is not repeated. This replaces
+the earlier behavior that reused Headscale's tag for every image, including
+PostgreSQL and Caddy. Use `--tag 2026.09-rc.4-amd64` to give all destinations
+the same tag as before. An explicit `--tag` is required for digest-pinned or
+untagged source references.
+Run from the ARM64 candidate checkout with matching ARM64 images to
 publish for that platform; changing a tag does not change image architecture.
 
 Successful pushes record Docker's registry manifest digests under
