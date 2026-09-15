@@ -21,7 +21,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import HTTPCookieProcessor, HTTPRedirectHandler, Request, build_opener
 
-from deployment import load_deployment
+from deployment import deployment_for_config
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -68,7 +68,7 @@ def main(argv=None):
     parser.add_argument("--application", help="OWNER/NAME of the application used as the synthetic probe template")
     parser.add_argument("--fixture-organization", help="Explicitly select the organization in which temporary fixtures may be created")
     args = parser.parse_args(argv)
-    deployment = load_deployment(args.deployment)
+    deployment = deployment_for_config(args.config, args.deployment)
     external = deployment['identity']['mode'] == 'external'
     if external and (not args.application or not args.fixture_organization):
         parser.error('External identity probes require --application and --fixture-organization')

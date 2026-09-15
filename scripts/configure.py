@@ -26,7 +26,7 @@ def write_private(path, text):
     path.chmod(0o600)
 
 
-def check_existing_identity(output, deployment):
+def check_existing_identity(output, deployment, site):
     """Changing an existing issuer or ownership mode requires a migration."""
     descriptor = output / 'deployment.json'
     if descriptor.exists():
@@ -61,6 +61,9 @@ def check_existing_identity(output, deployment):
             config = yaml.safe_load(path.read_text())
             if not isinstance(config, dict) or not isinstance(config.get('oidc'), dict):
                 raise ValueError('Existing runtime has invalid OIDC configuration')
+            if (deployment['identity']['mode'] == 'external'
+                    and config['oidc'].get('client_id') != site[name + '_client_id']):
+                raise ValueError('Existing OIDC client ID differs; credential migration required')
             issuers.append(config['oidc'].get('issuer'))
     env_path = output / 'compose.env'
     if not descriptor.exists() and env_path.exists():
@@ -134,6 +137,8 @@ def render(site, output, *, headscale_client_secret_file=None, headplane_client_
     for field in ('organization', 'headscale_client_id', 'headplane_client_id', 'admission_group'):
         if not isinstance(site.get(field), str) or not NAME.fullmatch(site[field]):
             raise ValueError(f'{field} must be a simple identifier')
+    if external and site['headscale_client_id'] == site['headplane_client_id']:
+        raise ValueError('External mode requires separate Headscale and Headplane client IDs')
     if external and urlsplit(deployment['identity']['issuer']).hostname in {site[x] for x in hosts}:
         raise ValueError('External issuer hostname must be distinct from Tailnet hostnames')
     if len({site[x] for x in hosts}) != len(hosts):
@@ -169,7 +174,7 @@ def render(site, output, *, headscale_client_secret_file=None, headplane_client_
     output = Path(output).resolve()
     if any(c in str(output) for c in '\n\r$# '):
         raise ValueError('Runtime directory must not contain whitespace, dollar signs, or #')
-    check_existing_identity(output, deployment)
+    check_existing_identity(output, deployment, site)
     credentials = {
         'headscale_oidc_secret': client_secret(output, 'headscale_oidc_secret', headscale_client_secret_file, external),
         'headplane_oidc_secret': client_secret(output, 'headplane_oidc_secret', headplane_client_secret_file, external),

@@ -26,7 +26,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from deployment import load_deployment
+from deployment import deployment_for_config
 
 DIRECTORY_MANAGED_ITEMS = (
     "Display name", "First name", "Last name", "Avatar", "Email", "Phone", "Country code", "Country/Region",
@@ -142,7 +142,7 @@ def main(argv=None):
                         help="Also change shared organization policy when selecting applications")
     parser.add_argument("--apply", action="store_true", help="write the planned changes")
     args = parser.parse_args(argv)
-    deployment = load_deployment(args.deployment)
+    deployment = deployment_for_config(args.config, args.deployment)
     external = deployment['identity']['mode'] == 'external'
     if external and not args.application:
         parser.error('External identity hardening requires explicit --application OWNER/NAME')

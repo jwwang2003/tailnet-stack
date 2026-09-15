@@ -16,6 +16,7 @@ ARTIFACT_SERVICES = {
     'sync': 'worker',
 }
 PRODUCTS = ('headscale', 'headplane', 'casdoor')
+DEPLOY_FILES = ('deploy/compose.yaml', 'deploy/compose.offline.yaml', 'deploy/Caddyfile')
 
 
 def validate_issuer(issuer):
@@ -90,6 +91,8 @@ def validate_deployment(value):
     if not isinstance(checksums, dict):
         raise ValueError('Deployment configuration_sha256 must be a mapping')
     for name, digest in checksums.items():
+        if not isinstance(name, str):
+            raise ValueError('Invalid deployment configuration path')
         path = Path(name)
         if (not name or path.is_absolute() or '..' in path.parts
                 or not re.fullmatch(r'[0-9a-f]{64}', str(digest))):
@@ -101,7 +104,27 @@ def load_deployment(path=None):
     """No path means legacy bundled selection; an explicit path must exist."""
     if path is None:
         return make_deployment()
+    if Path(path).is_symlink():
+        raise ValueError('Deployment descriptor cannot be a symlink')
     return validate_deployment(json.loads(Path(path).read_text()))
+
+
+def deployment_for_config(config_path, descriptor_path=None):
+    """Find runtime metadata beside an API config or its containing sync directory."""
+    config = Path(config_path).resolve()
+    found = []
+    for directory in (config.parent, config.parent.parent):
+        descriptor = directory / 'deployment.json'
+        if descriptor.exists() or descriptor.is_symlink():
+            found.append(load_deployment(descriptor))
+        elif (directory / 'deploy' / 'compose.yaml').exists():
+            raise ValueError('Rendered runtime requires deployment.json')
+    selected = load_deployment(descriptor_path) if descriptor_path is not None else None
+    if found:
+        if any(item != found[0] for item in found[1:]) or (selected is not None and selected != found[0]):
+            raise ValueError('Explicit deployment differs from the configured runtime')
+        return found[0]
+    return selected if selected is not None else load_deployment()
 
 
 def selected_products(deployment):
@@ -119,6 +142,8 @@ def verify_configuration(runtime, deployment):
     """Reject missing or modified files recorded in the runtime descriptor."""
     validate_deployment(deployment)
     root = Path(runtime).resolve()
+    if set(deployment['configuration_sha256']) != set(DEPLOY_FILES):
+        raise ValueError('Deployment descriptor must bind all effective deploy files')
     for relative, expected in deployment['configuration_sha256'].items():
         path = root / relative
         if path.is_symlink() or not path.resolve().is_relative_to(root):

@@ -284,6 +284,19 @@ class ExternalConfigureTests(unittest.TestCase):
                 self.render()
             self.assertEqual(self.snapshot(), before)
 
+    def test_external_client_ids_are_separate_and_preserved(self):
+        self.site['headplane_client_id'] = self.site['headscale_client_id']
+        with self.assertRaisesRegex(ValueError, 'separate.*client IDs'):
+            self.render()
+        self.assertFalse(self.runtime.exists())
+        self.site['headplane_client_id'] = 'headplane'
+        self.render()
+        before = self.snapshot()
+        self.site['headscale_client_id'] = 'replacement-client'
+        with self.assertRaisesRegex(ValueError, 'client ID differs'):
+            self.render()
+        self.assertEqual(self.snapshot(), before)
+
     def test_external_descriptor_rejects_leftover_identity_state(self):
         self.render()
         casdoor = self.runtime / 'casdoor'
