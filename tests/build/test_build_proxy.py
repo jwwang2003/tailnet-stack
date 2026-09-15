@@ -1,5 +1,6 @@
 """Exercise build command wiring with fake Docker; no daemon/source checkouts required."""
 import json
+import hashlib
 import os
 from pathlib import Path
 import shutil
@@ -22,7 +23,7 @@ class BuildProxyTests(unittest.TestCase):
                 path = root / recipe
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text('FROM golang:1.26.5 AS builder\nFROM alpine:3.22\n')
-            (root / 'scripts/release.py').write_text('import sys\nfrom deployment import load_deployment\nselection=load_deployment(sys.argv[sys.argv.index("--deployment")+1] if "--deployment" in sys.argv else None)\nif "artifacts" in sys.argv: print("\\n".join(selection["artifacts"]))\nelif "field" in sys.argv:\n print("test/image:rc" if sys.argv[-1] == "image" else "a"*40)\nelif "platform" in sys.argv: print("linux/amd64")\nelif "support-image" in sys.argv: print("test/sync:rc")\n')
+            (root / 'scripts/release.py').write_text('import sys\nfrom pathlib import Path\nfrom deployment import load_deployment, verify_configuration\ndescriptor=Path(sys.argv[sys.argv.index("--deployment")+1]) if "--deployment" in sys.argv else None\nselection=load_deployment(descriptor)\nif descriptor: verify_configuration(descriptor.parent, selection)\nif "artifacts" in sys.argv: print("\\n".join(selection["artifacts"]))\nelif "field" in sys.argv:\n print("test/image:rc" if sys.argv[-1] == "image" else "a"*40)\nelif "platform" in sys.argv: print("linux/amd64")\nelif "support-image" in sys.argv: print("test/sync:rc")\n')
             binary = root / 'bin'
             binary.mkdir()
             identity = binary / 'id'
@@ -60,6 +61,12 @@ else: sys.exit(9)
                        TEST_DRIVER=driver, TEST_BUILDX='yes' if buildx else 'no', TEST_ENGINE='yes' if engine else 'no', TEST_SECURITY='["name=rootless"]' if rootless else '[]', TEST_LOG=str(log))
             if deployment is not None:
                 descriptor = root / 'deployment.json'
+                if 'configuration_sha256' in deployment:
+                    for name in ('deploy/compose.yaml', 'deploy/compose.offline.yaml', 'deploy/Caddyfile'):
+                        path = root / name
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        path.write_text('fixture deployment file')
+                        deployment['configuration_sha256'][name] = hashlib.sha256(path.read_bytes()).hexdigest()
                 descriptor.write_text(json.dumps(deployment))
                 env['DEPLOYMENT_FILE'] = str(descriptor)
                 (root / 'casdoor/Dockerfile').unlink()

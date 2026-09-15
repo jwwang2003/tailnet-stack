@@ -11,6 +11,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import tarfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from deployment import (load_deployment, validate_deployment, selected_products,
@@ -171,6 +172,8 @@ def export_bundle(args):
         save_flags = ['--format', 'docker-archive', '--multi-image-archive'] if engine == 'podman' else []
         command(engine, 'image', 'save', *save_flags, '--output', str(archive),
                 *(image['id'] for image in manifest['images'].values()))
+        if descriptor_path:
+            validate_archive_inventory(archive, manifest['images'])
         manifest['archive'] = dict(file='images.tar', sha256=digest(archive))
         (staging / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
         if descriptor_path:
@@ -184,6 +187,72 @@ def export_bundle(args):
         if staging.exists():
             shutil.rmtree(staging)
     print(f'Exported {len(manifest["images"])} images to {output}')
+
+
+def validate_archive_inventory(path, images):
+    """Check every loadable Docker/OCI image before giving the archive to Docker."""
+    expected = {item['id'] for item in images.values()}
+    with tarfile.open(path, 'r:*') as archive:
+        members = {}
+        for member in archive:
+            name = member.name.removeprefix('./')
+            require(name not in members, 'Duplicate archive member: ' + name)
+            require(not Path(name).is_absolute() and '..' not in Path(name).parts and
+                    (member.isfile() or member.isdir()), 'Unsafe image archive member: ' + name)
+            members[name] = member
+
+        def read(name):
+            member = members.get(name)
+            require(member is not None and member.isfile(), 'Missing archive image metadata: ' + name)
+            require(member.size <= 16 * 1024 * 1024, 'Image metadata exceeds size limit')
+            return archive.extractfile(member).read()
+
+        def document(name):
+            value = json.loads(read(name))
+            require(isinstance(value, dict), 'Invalid archive image metadata: ' + name)
+            return value
+
+        entries = json.loads(read('manifest.json'))
+        require(isinstance(entries, list) and entries, 'Invalid Docker save image manifest')
+        actual = set()
+        for entry in entries:
+            require(isinstance(entry, dict) and isinstance(entry.get('Config'), str),
+                    'Invalid Docker save image entry')
+            actual.add('sha256:' + hashlib.sha256(read(entry['Config'])).hexdigest())
+        require(actual == expected, 'Archive image inventory differs from bundle manifest')
+
+        # Modern Docker archives may also expose an OCI index. Validate both views
+        # so another loader cannot select an extra image hidden from manifest.json.
+        if 'index.json' in members:
+            actual = set()
+            def visit(descriptor, depth=0):
+                require(depth < 8 and isinstance(descriptor, dict), 'Invalid OCI image descriptor')
+                digest_value = descriptor.get('digest', '')
+                require(isinstance(digest_value, str) and digest_value.startswith('sha256:') and
+                        SHA.fullmatch(digest_value[7:]), 'Invalid OCI image digest')
+                payload = read('blobs/sha256/' + digest_value[7:])
+                require(hashlib.sha256(payload).hexdigest() == digest_value[7:] and
+                        len(payload) == descriptor.get('size'), 'OCI image descriptor checksum differs')
+                value = json.loads(payload)
+                require(isinstance(value, dict), 'Invalid OCI image manifest')
+                if 'manifests' in value:
+                    require(isinstance(value['manifests'], list), 'Invalid OCI image index')
+                    for child in value['manifests']:
+                        visit(child, depth + 1)
+                else:
+                    config = value.get('config', {})
+                    digest_value = config.get('digest', '')
+                    require(isinstance(digest_value, str) and digest_value.startswith('sha256:') and
+                            SHA.fullmatch(digest_value[7:]), 'Invalid OCI image config digest')
+                    payload = read('blobs/sha256/' + digest_value[7:])
+                    require(hashlib.sha256(payload).hexdigest() == digest_value[7:] and
+                            len(payload) == config.get('size'), 'OCI image config checksum differs')
+                    actual.add(digest_value)
+            index = document('index.json')
+            require(isinstance(index.get('manifests'), list), 'Invalid OCI archive index')
+            for descriptor in index['manifests']:
+                visit(descriptor)
+            require(actual == expected, 'OCI archive inventory differs from bundle manifest')
 
 
 def validate_bundle(bundle, deployment=None):
@@ -243,6 +312,8 @@ def validate_bundle(bundle, deployment=None):
     require(isinstance(archive, dict) and archive.get('file') == 'images.tar' and
             isinstance(archive.get('sha256'), str) and SHA.fullmatch(archive['sha256']), 'Invalid archive metadata')
     require(digest(bundle / 'images.tar') == archive['sha256'], 'Bundle archive checksum mismatch')
+    if schema == 2:
+        validate_archive_inventory(bundle / 'images.tar', images)
     return manifest
 
 
@@ -303,12 +374,14 @@ def pin_env(path, values):
 def use_bundle(args):
     descriptor_path = getattr(args, 'deployment', None)
     runtime_descriptor = args.runtime.resolve() / 'deployment.json'
-    if runtime_descriptor.exists():
+    if runtime_descriptor.exists() or runtime_descriptor.is_symlink():
         runtime_deployment = load_deployment(runtime_descriptor)
         if descriptor_path:
             require(load_deployment(descriptor_path) == runtime_deployment,
                     'Selected deployment differs from runtime descriptor')
         descriptor_path = runtime_descriptor
+    elif (args.runtime.resolve() / 'deploy').exists() or (args.runtime.resolve() / 'deploy').is_symlink():
+        raise ValueError('Rendered runtime requires deployment.json before image import/check')
     deployment = load_deployment(descriptor_path) if descriptor_path else None
     if descriptor_path:
         verify_configuration(args.runtime.resolve(), deployment)
@@ -354,7 +427,7 @@ def main():
     args = parser.parse_args()
     try:
         (export_bundle if args.action == 'export' else use_bundle)(args)
-    except (ValueError, OSError, subprocess.CalledProcessError, KeyError, TypeError) as error:
+    except (ValueError, OSError, subprocess.CalledProcessError, KeyError, TypeError, tarfile.TarError) as error:
         parser.exit(1, 'image-bundle: ' + str(error) + '\n')
 
 

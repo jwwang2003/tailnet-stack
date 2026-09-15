@@ -46,11 +46,17 @@ class SWRTests(unittest.TestCase):
             docker.assert_not_called()
 
     def test_external_descriptor_filters_defaults_but_preserves_explicit_images(self):
-        from deployment import make_deployment
+        from deployment import make_deployment, DEPLOY_FILES
         with tempfile.TemporaryDirectory() as directory:
             descriptor = Path(directory) / 'deployment.json'
             for owner in ('external', 'disabled', 'local'):
-                descriptor.write_text(json.dumps(make_deployment('external', 'https://login.example.com', owner)))
+                selection = make_deployment('external', 'https://login.example.com', owner)
+                for name in DEPLOY_FILES:
+                    path = Path(directory) / name
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text('fixture deployment file')
+                    selection['configuration_sha256'][name] = hashlib.sha256(path.read_bytes()).hexdigest()
+                descriptor.write_text(json.dumps(selection))
                 platform, sources = swr.load_sources(deployment=descriptor)
                 expected = {'headscale', 'headplane', 'caddy'} | ({'sync'} if owner == 'local' else set())
                 self.assertEqual(set(sources), expected)

@@ -2,6 +2,8 @@
 import copy
 import importlib.util
 import io
+import hashlib
+import tarfile
 import json
 from pathlib import Path
 import subprocess
@@ -14,6 +16,40 @@ ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location('image_bundle', ROOT / 'scripts/image-bundle.py')
 bundle = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(bundle)
+
+
+def image_config(image):
+    return json.dumps({'architecture': image['Architecture'], 'os': image['Os'],
+                       'config': image['Config'], 'rootfs': {'type': 'layers', 'diff_ids': []}},
+                      sort_keys=True).encode()
+
+
+def write_archive(path, images, extra_members=None):
+    members = {}
+    entries = []
+    for image in images:
+        payload = image_config(image)
+        filename = hashlib.sha256(payload).hexdigest() + '.json'
+        members[filename] = payload
+        entries.append({'Config': filename, 'RepoTags': None, 'Layers': []})
+    members['manifest.json'] = json.dumps(entries).encode()
+    members.update(extra_members or {})
+    with tarfile.open(path, 'w') as archive:
+        for name, payload in members.items():
+            member = tarfile.TarInfo(name)
+            member.size = len(payload)
+            archive.addfile(member, io.BytesIO(payload))
+
+
+def bind_deploy_files(runtime, selection):
+    from deployment import DEPLOY_FILES
+    for name in DEPLOY_FILES:
+        path = runtime / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('services: {}' if name.endswith('.yaml') else '# fixture proxy')
+        selection['configuration_sha256'][name] = bundle.digest(path)
+    (runtime / 'deployment.json').write_text(json.dumps(selection))
+
 
 
 class FakeDocker:
@@ -46,13 +82,19 @@ class FakeDocker:
             if self.fail_save:
                 raise subprocess.CalledProcessError(1, args)
             output_pos = args.index('--output') + 1
-            Path(args[output_pos]).write_text(json.dumps([self.images[image_id] for image_id in args[output_pos+1:]]))
+            write_archive(Path(args[output_pos]), [self.images[image_id] for image_id in args[output_pos+1:]])
             return ''
         if command == ('image', 'load'):
-            for image in json.loads(Path(args[4]).read_text()):
-                if self.bad_load:
-                    image['Config']['Labels'][bundle.REVISION] = 'bad'
-                self.images[image['Id']] = image
+            with tarfile.open(args[4]) as archive:
+                entries = json.load(archive.extractfile('manifest.json'))
+                for entry in entries:
+                    payload = archive.extractfile(entry['Config']).read()
+                    config = json.loads(payload)
+                    image = dict(Id='sha256:' + hashlib.sha256(payload).hexdigest(),
+                                 Os=config['os'], Architecture=config['architecture'], Config=config['config'])
+                    if self.bad_load:
+                        image['Config']['Labels'][bundle.REVISION] = 'bad'
+                    self.images[image['Id']] = image
             return ''
         if command == ('image', 'tag'):
             self.images[args[4]] = self.images[args[3]]
@@ -89,13 +131,15 @@ class BundleTests(unittest.TestCase):
         components = yaml.safe_load((self.root / 'versions.lock.yaml').read_text())['components']
         sources = bundle.binding()
         refs = self.config['images'] | {key: value['image'] for key, value in components.items()}
+        self.references = refs
         self.headscale_reference = refs['headscale']
         images = {}
         for number, key in enumerate(bundle.ENV, 1):
             revision = (components[key]['source_commit'] if key in components else
                         sources['integration_commit'] if key == 'sync' else 'upstream-label')
-            image = dict(Id='sha256:' + str(number) * 64, Os='linux', Architecture=self.architecture,
-                         Config={'Labels': {bundle.REVISION: revision}})
+            image = dict(Os='linux', Architecture=self.architecture,
+                         Config={'Labels': {bundle.REVISION: revision, 'fixture.image': key}})
+            image['Id'] = 'sha256:' + hashlib.sha256(image_config(image)).hexdigest()
             images[refs[key]] = images[image['Id']] = image
         self.docker = FakeDocker(images)
         self.docker.platform['Architecture'] = {'amd64': 'x86_64', 'arm64': 'aarch64'}[self.architecture]
@@ -295,7 +339,7 @@ class BundleTests(unittest.TestCase):
         from deployment import make_deployment
         selection = make_deployment('external', 'https://login.example.com', owner)
         descriptor = self.runtime / 'deployment.json'
-        descriptor.write_text(json.dumps(selection))
+        bind_deploy_files(self.runtime, selection)
         self.export_args.deployment = descriptor
         return selection
 
@@ -304,7 +348,7 @@ class BundleTests(unittest.TestCase):
         self.export_args.pull_supporting_images = True
         # No local identity or worker images are needed.
         for key in ('casdoor', 'database', 'sync'):
-            image_id = 'sha256:' + str(list(bundle.ENV).index(key) + 1) * 64
+            image_id = self.docker.images[self.references[key]]['Id']
             self.docker.images = {ref: image for ref, image in self.docker.images.items()
                                   if image['Id'] != image_id}
         manifest = self.export()
@@ -364,17 +408,14 @@ class BundleTests(unittest.TestCase):
         self.export()
         from deployment import make_deployment
         descriptor = make_deployment('bundled', 'https://login.example.com')
-        (self.runtime / 'deployment.json').write_text(json.dumps(descriptor))
+        bind_deploy_files(self.runtime, descriptor)
         bundle.use_bundle(self.import_args)
         self.import_args.action = 'check'
         bundle.use_bundle(self.import_args)
 
     def test_external_bundle_requires_descriptor_and_unchanged_configuration(self):
         selection = self.external()
-        compose = self.runtime / 'compose.yaml'
-        compose.write_text('services: {}')
-        selection['configuration_sha256'] = {'compose.yaml': bundle.digest(compose)}
-        self.export_args.deployment.write_text(json.dumps(selection))
+        compose = self.runtime / 'deploy/compose.yaml'
         self.export()
         self.docker.calls.clear()
         with self.assertRaisesRegex(ValueError, 'requires a deployment'):
@@ -383,6 +424,84 @@ class BundleTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'configuration changed'):
             bundle.use_bundle(self.import_args)
         self.assertEqual(self.docker.calls, [])
+
+    def test_missing_or_dangling_runtime_descriptor_refuses_legacy_import_before_docker(self):
+        self.export()
+        descriptor = self.runtime / 'deployment.json'
+        for mutation in ('rendered', 'dangling'):
+            with self.subTest(mutation=mutation):
+                if mutation == 'rendered':
+                    (self.runtime / 'deploy').mkdir()
+                else:
+                    descriptor.symlink_to(self.runtime / 'missing.json')
+                self.docker.calls.clear()
+                with self.assertRaises(ValueError):
+                    bundle.use_bundle(self.import_args)
+                self.assertEqual(self.docker.calls, [])
+                self.assertEqual(self.env.read_bytes(), self.original)
+
+    def test_empty_configuration_binding_is_rejected_before_export_or_import(self):
+        self.external()
+        original = self.export()
+        descriptor = self.runtime / 'deployment.json'
+        selection = json.loads(descriptor.read_text())
+        selection['configuration_sha256'] = {}
+        descriptor.write_text(json.dumps(selection))
+        original['deployment'] = selection
+        original['deployment_sha256'] = bundle.deployment_digest(selection)
+        self.write_manifest(original)
+        self.docker.calls.clear()
+        with self.assertRaisesRegex(ValueError, 'bind all effective'):
+            bundle.use_bundle(self.import_args)
+        self.export_args.output = self.output.parent / 'another-bundle'
+        with self.assertRaisesRegex(ValueError, 'bind all effective'):
+            bundle.export_bundle(self.export_args)
+        self.assertEqual(self.docker.calls, [])
+
+    def test_extra_archive_image_rejected_even_with_updated_archive_checksum(self):
+        self.external()
+        manifest = self.export()
+        images = [self.docker.images[item['id']] for item in manifest['images'].values()]
+        extra = copy.deepcopy(images[0])
+        extra['Config']['Labels']['fixture.image'] = 'unselected-casdoor'
+        write_archive(self.output / 'images.tar', images + [extra])
+        manifest['archive']['sha256'] = bundle.digest(self.output / 'images.tar')
+        self.write_manifest(manifest)
+        self.docker.calls.clear()
+        with self.assertRaisesRegex(ValueError, 'inventory differs'):
+            bundle.use_bundle(self.import_args)
+        self.assertEqual(self.docker.calls, [])
+        self.assertEqual(self.env.read_bytes(), self.original)
+
+    def test_oci_index_cannot_hide_an_extra_image_from_docker_manifest(self):
+        self.external()
+        manifest = self.export()
+        images = [self.docker.images[item['id']] for item in manifest['images'].values()]
+        extra = copy.deepcopy(images[0])
+        extra['Config']['Labels']['fixture.image'] = 'hidden-in-oci-index'
+        for include_extra in (False, True):
+            members = {}
+            descriptors = []
+            for image in images + ([extra] if include_extra else []):
+                config = image_config(image)
+                config_hash = hashlib.sha256(config).hexdigest()
+                members['blobs/sha256/' + config_hash] = config
+                document = json.dumps({'schemaVersion': 2, 'config': {
+                    'digest': 'sha256:' + config_hash, 'size': len(config)}, 'layers': []}).encode()
+                document_hash = hashlib.sha256(document).hexdigest()
+                members['blobs/sha256/' + document_hash] = document
+                descriptors.append({'digest': 'sha256:' + document_hash, 'size': len(document)})
+            members['index.json'] = json.dumps({'schemaVersion': 2, 'manifests': descriptors}).encode()
+            write_archive(self.output / 'images.tar', images, members)
+            manifest['archive']['sha256'] = bundle.digest(self.output / 'images.tar')
+            self.write_manifest(manifest)
+            self.docker.calls.clear()
+            if include_extra:
+                with self.assertRaisesRegex(ValueError, 'OCI archive inventory differs'):
+                    bundle.use_bundle(self.import_args)
+                self.assertEqual(self.docker.calls, [])
+            else:
+                bundle.use_bundle(self.import_args)
 
     def test_import_and_check_do_not_import_yaml(self):
         self.export()
