@@ -46,7 +46,8 @@ def bind_deploy_files(runtime, selection):
     for name in DEPLOY_FILES:
         path = runtime / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text('services: {}' if name.endswith('.yaml') else '# fixture proxy')
+        path.write_text(json.dumps({'services': {service: {} for service in selection['services']}})
+                        if name.endswith('.yaml') else '# fixture proxy')
         selection['configuration_sha256'][name] = bundle.digest(path)
     (runtime / 'deployment.json').write_text(json.dumps(selection))
 

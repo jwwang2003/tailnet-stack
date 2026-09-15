@@ -6,7 +6,8 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts'))
 from deployment import (deployment_from_site, load_deployment, make_deployment,
-                        selected_products, validate_deployment, validate_issuer)
+                        selected_products, validate_deployment, validate_issuer,
+                        deployment_for_config, verify_configuration)
 
 
 class DeploymentTests(unittest.TestCase):
@@ -53,3 +54,31 @@ class DeploymentTests(unittest.TestCase):
             path.write_text(json.dumps(value))
             with self.assertRaises(ValueError):
                 load_deployment(path)
+
+    def test_runtime_metadata_is_required_and_cannot_be_overridden(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = root / 'sync' / 'sync.json'
+            config.parent.mkdir()
+            config.write_text('{}')
+            value = make_deployment('external', 'https://id.example.com')
+            descriptor = root / 'deployment.json'
+            descriptor.write_text(json.dumps(value))
+            self.assertEqual(deployment_for_config(config), value)
+            bundled = root / 'bundled.json'
+            bundled.write_text(json.dumps(make_deployment()))
+            with self.assertRaisesRegex(ValueError, 'differs'):
+                deployment_for_config(config, bundled)
+            descriptor.unlink()
+            (root / 'deploy').mkdir()
+            (root / 'deploy/compose.yaml').write_text('services: {}')
+            with self.assertRaisesRegex(ValueError, 'requires deployment.json'):
+                deployment_for_config(config)
+            descriptor.symlink_to(root / 'absent')
+            with self.assertRaisesRegex(ValueError, 'symlink'):
+                load_deployment(descriptor)
+
+    def test_empty_configuration_bindings_are_not_a_runtime(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(ValueError, 'bind all'):
+                verify_configuration(directory, make_deployment('external', 'https://id.example.com'))

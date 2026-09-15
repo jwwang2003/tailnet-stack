@@ -1,5 +1,10 @@
 # Deploy Tailnet Stack
 
+For a shared identity service already used by other applications, follow
+[external Casdoor mode](external-casdoor.md). That mode excludes Casdoor and its
+database from Tailnet-owned resources. The bundled procedure below remains for
+self-contained deployments; do not use its root Compose file for external mode.
+
 The core is Headscale, Headplane, Casdoor, PostgreSQL, and Caddy. Casdoor supplies
 OIDC to both network services and can use locally managed accounts or a configured
 identity provider. Choose and test that identity source before admitting employees.

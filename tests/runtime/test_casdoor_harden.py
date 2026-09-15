@@ -106,7 +106,7 @@ class ApplicationHardeningTests(unittest.TestCase):
 
 
 class SharedIdentityBoundaryTests(unittest.TestCase):
-    def run_hardener(self, applications, flags):
+    def run_hardener(self, applications, flags, *, explicit=True):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             config = root / 'config.json'
@@ -122,13 +122,20 @@ class SharedIdentityBoundaryTests(unittest.TestCase):
                     if action == 'get-organization': return {'accountItems': [], 'isProfilePublic': True}
             with patch.object(harden, 'Api', API), contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
                 try:
-                    result = harden.main(['--config', str(config), '--deployment', str(descriptor), *flags])
+                    selection = ['--deployment', str(descriptor)] if explicit else []
+                    result = harden.main(['--config', str(config), *selection, *flags])
                 except SystemExit:
                     result = 1
             return result, calls
 
     def test_external_requires_application_before_api_access(self):
         result, calls = self.run_hardener([], ['--apply'])
+        self.assertEqual(result, 1)
+        self.assertEqual(calls, [])
+
+    def test_omitted_descriptor_cannot_bypass_shared_identity_guards(self):
+        apps = [{'owner': 'admin', 'name': 'sub2api', 'organization': 'employees'}]
+        result, calls = self.run_hardener(apps, ['--apply'], explicit=False)
         self.assertEqual(result, 1)
         self.assertEqual(calls, [])
 
@@ -163,6 +170,13 @@ class SharedIdentityBoundaryTests(unittest.TestCase):
             with patch.object(probe, 'Admin') as api, contextlib.redirect_stderr(io.StringIO()):
                 with self.assertRaises(SystemExit):
                     probe.main(['--config', '/unread-config', '--deployment', str(descriptor)])
+                api.assert_not_called()
+            config = Path(directory) / 'sync' / 'sync.json'
+            config.parent.mkdir()
+            config.write_text('{}')
+            with patch.object(probe, 'Admin') as api, contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit):
+                    probe.main(['--config', str(config)])
                 api.assert_not_called()
 
 

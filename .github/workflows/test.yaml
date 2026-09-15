@@ -19,3 +19,40 @@ jobs:
         run: |
           uv run --locked python scripts/configure.py --site deploy/site.example.json --output "$RUNNER_TEMP/tailnet-runtime"
           docker compose --env-file "$RUNNER_TEMP/tailnet-runtime/compose.env" -f deploy/compose.yaml --profile '*' config --quiet
+      - name: Validate bundled and external ownership with Docker Compose
+        run: |
+          uv run python - <<'PY'
+          import importlib.util
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+
+          spec = importlib.util.spec_from_file_location('configure', 'scripts/configure.py')
+          configure = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(configure)
+          root = Path(os.environ['RUNNER_TEMP']) / 'identity-mode-checks'
+          root.mkdir()
+          hs = root / 'headscale-secret'
+          hp = root / 'headplane-secret'
+          hs.write_text('synthetic-headscale-client-secret')
+          hp.write_text('synthetic-headplane-client-secret')
+          external = json.loads(Path('deploy/site.external.example.json').read_text())
+          bundled = json.loads(Path('deploy/site.example.json').read_text())
+          cases = {'bundled': bundled, 'external': external,
+                   'external-local': external | {'directory_sync': {'owner': 'local'}}}
+          for name, site in cases.items():
+              runtime = configure.render(site, root / name,
+                  headscale_client_secret_file=hs, headplane_client_secret_file=hp)
+              command = ['docker', 'compose', '--env-file', str(runtime / 'compose.env'),
+                         '-f', str(runtime / 'deploy/compose.yaml'),
+                         '-f', str(runtime / 'deploy/compose.offline.yaml'),
+                         '--profile', '*', 'config', '--format', 'json']
+              effective = json.loads(subprocess.check_output(command, text=True))
+              deployment = json.loads((runtime / 'deployment.json').read_text())
+              assert set(effective['services']) == set(deployment['services']), name
+              if name.startswith('external'):
+                  assert not {'db', 'casdoor'} & set(effective['services'])
+                  assert 'casdoor_db' not in effective.get('volumes', {})
+              print(name, sorted(effective['services']))
+          PY

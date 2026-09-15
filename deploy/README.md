@@ -1,5 +1,9 @@
 # Tailnet Stack deployment boundaries
 
+External Casdoor mode is documented in the [external identity guide](../docs/external-casdoor.md).
+Use the effective Compose files generated inside that runtime; this directory's
+`compose.yaml` remains the legacy bundled entry point.
+
 Start with the [provider-neutral deployment guide](../docs/integrated-platform.md).
 The core is Headscale, Headplane, Casdoor, PostgreSQL, and Caddy. The Feishu
 worker belongs to the optional `sync` Compose profile; the renderer does not

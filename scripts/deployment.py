@@ -150,3 +150,18 @@ def verify_configuration(runtime, deployment):
             raise ValueError('Configuration path escapes runtime: ' + relative)
         if hashlib.sha256(path.read_bytes()).hexdigest() != expected:
             raise ValueError('Deployment configuration changed: ' + relative)
+    # Checksums bind bytes; also verify those bytes select the declared services.
+    # Keep YAML optional for legacy archive readers that never validate a runtime.
+    import yaml
+    expected_services = set(deployment['services'])
+    for relative in DEPLOY_FILES[:2]:
+        effective = yaml.safe_load((root / relative).read_text())
+        if not isinstance(effective, dict) or not isinstance(effective.get('services'), dict):
+            raise ValueError('Invalid effective deployment services: ' + relative)
+        if set(effective['services']) != expected_services:
+            raise ValueError('Effective Compose services differ from deployment: ' + relative)
+        if set(effective) - {'name', 'services', 'volumes', 'secrets'}:
+            raise ValueError('Unsupported deployment resource indirection: ' + relative)
+        if deployment['identity']['mode'] == 'external':
+            if effective.get('secrets') or set(effective.get('volumes', {})) - {'caddy_data', 'caddy_config'}:
+                raise ValueError('External deployment includes identity resources')

@@ -65,7 +65,8 @@ else: sys.exit(9)
                     for name in ('deploy/compose.yaml', 'deploy/compose.offline.yaml', 'deploy/Caddyfile'):
                         path = root / name
                         path.parent.mkdir(parents=True, exist_ok=True)
-                        path.write_text('fixture deployment file')
+                        path.write_text(json.dumps({'services': {service: {} for service in deployment['services']}})
+                                        if name.endswith('.yaml') else '# fixture proxy')
                         deployment['configuration_sha256'][name] = hashlib.sha256(path.read_bytes()).hexdigest()
                 descriptor.write_text(json.dumps(deployment))
                 env['DEPLOYMENT_FILE'] = str(descriptor)

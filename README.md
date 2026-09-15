@@ -57,6 +57,9 @@ lock is metadata for subsequent builds.
 
 1. Read [integrated platform](docs/integrated-platform.md) for the architecture
    and the [Feishu recipe](docs/deployment.md) when using that integration.
+   To use an independently managed identity service, follow
+   [external Casdoor](docs/external-casdoor.md). Use its generated runtime Compose
+   files; the repository-level Compose file is the legacy bundled deployment.
 2. For an offline server, follow [local build and deploy](docs/local-build-deploy.md).
 3. Copy `deploy/site.example.json` to `.runtime/site.json`, render it with
    `scripts/configure.py`, and keep `.runtime/` private.

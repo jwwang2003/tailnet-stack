@@ -54,7 +54,8 @@ class SWRTests(unittest.TestCase):
                 for name in DEPLOY_FILES:
                     path = Path(directory) / name
                     path.parent.mkdir(parents=True, exist_ok=True)
-                    path.write_text('fixture deployment file')
+                    path.write_text(json.dumps({'services': {service: {} for service in selection['services']}})
+                                        if name.endswith('.yaml') else '# fixture proxy')
                     selection['configuration_sha256'][name] = hashlib.sha256(path.read_bytes()).hexdigest()
                 descriptor.write_text(json.dumps(selection))
                 platform, sources = swr.load_sources(deployment=descriptor)

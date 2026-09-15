@@ -1,5 +1,10 @@
 # Operator handbook
 
+For external identity deployments, use the [external Casdoor runbook](external-casdoor.md)
+and runtime-generated Compose files. Casdoor/database recovery belongs to the
+identity operator. The repository-level Compose commands below describe bundled
+installations and must not be reused unchanged for external mode.
+
 Start with the [core deployment guide](integrated-platform.md) for provider-neutral setup.
 The Feishu identity and synchronization sections below apply only when that
 optional adapter is enabled; backup, restore, and service operations apply to the core.

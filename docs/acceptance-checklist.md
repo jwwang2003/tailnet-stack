@@ -1,5 +1,20 @@
 # Pilot and release acceptance
 
+## External identity ownership
+
+- [ ] External runtime Compose (including the offline overlay and all profiles)
+      excludes Casdoor, its database, and externally owned workers/resources.
+- [ ] Both OIDC clients use the exact external issuer and separately registered
+      secrets; rerender does not rotate credentials or change identity ownership.
+- [ ] Tailnet stop/teardown and backup/restore leave the shared issuer and a second
+      OIDC client available, with identity data unchanged.
+- [ ] External backup contains only locally owned state; restored workers remain
+      stopped. The identity operator's version/recovery evidence is recorded.
+- [ ] Build, source verification, registry/offline delivery, and promotion use the
+      same deployment descriptor and selected artifact set.
+- [ ] Hardening specifies applications; organization-wide policy changes require
+      a separate explicit identity-owner action.
+
 For the core platform, validate the selected provider, stable OIDC identity, admission and role boundaries, existing-access revocation, and isolated restore. The Feishu-specific checks below apply only when that adapter is enabled; record the alternative account lifecycle evidence in the release manifest when it is disabled.
 
 Record date, exact image digests/source lock, test environment, result, and evidence
