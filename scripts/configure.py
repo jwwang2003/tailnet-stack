@@ -8,11 +8,12 @@ from pathlib import Path
 import re
 import secrets
 import sys
+from urllib.parse import urlsplit
 import yaml
 
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SOURCE_ROOT / 'scripts'))
-from deployment import deployment_from_site, load_deployment, selected_products
+from deployment import deployment_from_site, load_deployment, selected_products, verify_configuration
 
 HOST = re.compile(r"(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
 NAME = re.compile(r"[A-Za-z0-9_-]{1,80}$")
@@ -29,9 +30,16 @@ def check_existing_identity(output, deployment):
     """Changing an existing issuer or ownership mode requires a migration."""
     descriptor = output / 'deployment.json'
     if descriptor.exists():
-        previous = load_deployment(descriptor)['identity']
-        if previous != deployment['identity']:
+        previous = load_deployment(descriptor)
+        if previous['identity'] != deployment['identity']:
             raise ValueError('Existing runtime identity mode or issuer differs; migration required')
+        if previous['directory_sync'] != deployment['directory_sync']:
+            raise ValueError('Existing directory synchronization ownership differs; migration required')
+        # Validate old generated files before replacing them with updated templates.
+        expected_files = {'deploy/compose.yaml', 'deploy/compose.offline.yaml', 'deploy/Caddyfile'}
+        if not expected_files.issubset(previous['configuration_sha256']):
+            raise ValueError('Existing deployment descriptor omits generated configuration checksums')
+        verify_configuration(output, previous)
     else:
         # Old runtimes have no descriptor and always own their Casdoor instance.
         markers = ('compose.env', 'casdoor', 'headscale/config.yaml', 'headplane/config.yaml',
@@ -39,6 +47,13 @@ def check_existing_identity(output, deployment):
         if any((output / name).exists() for name in markers):
             if deployment['identity']['mode'] != 'bundled':
                 raise ValueError('Legacy runtime is bundled; migration required')
+            if deployment['directory_sync']['owner'] != 'local':
+                raise ValueError('Legacy directory synchronization ownership is local; migration required')
+    if deployment['identity']['mode'] == 'external':
+        for name in ('casdoor', 'secrets/db_password'):
+            path = output / name
+            if path.exists() or path.is_symlink():
+                raise ValueError('External runtime contains bundled identity state; migration required')
     issuers = []
     for name in ('headscale', 'headplane'):
         path = output / name / 'config.yaml'
@@ -119,6 +134,8 @@ def render(site, output, *, headscale_client_secret_file=None, headplane_client_
     for field in ('organization', 'headscale_client_id', 'headplane_client_id', 'admission_group'):
         if not isinstance(site.get(field), str) or not NAME.fullmatch(site[field]):
             raise ValueError(f'{field} must be a simple identifier')
+    if external and urlsplit(deployment['identity']['issuer']).hostname in {site[x] for x in hosts}:
+        raise ValueError('External issuer hostname must be distinct from Tailnet hostnames')
     if len({site[x] for x in hosts}) != len(hosts):
         raise ValueError('Service hostnames and tailnet DNS suffix must be distinct')
     inputs = json.loads((SOURCE_ROOT / 'image-inputs.json').read_text())

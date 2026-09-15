@@ -265,3 +265,87 @@ class ExternalConfigureTests(unittest.TestCase):
             self.assertEqual(actual, expected)
         self.assertEqual((self.runtime / 'deploy/Caddyfile').read_text(),
                          (ROOT / 'deploy/Caddyfile').read_text())
+
+
+    def test_external_issuer_cannot_use_tailnet_hostnames(self):
+        for field in ('headscale_host', 'headplane_host', 'tailnet_domain'):
+            with self.subTest(field=field):
+                self.site['identity']['issuer'] = 'https://' + self.site[field] + ':443/identity/'
+                with self.assertRaisesRegex(ValueError, 'must be distinct'):
+                    self.render()
+                self.assertFalse(self.runtime.exists())
+
+    def test_existing_directory_ownership_cannot_change(self):
+        self.render()
+        before = self.snapshot()
+        for owner in ('local', 'disabled'):
+            self.site['directory_sync']['owner'] = owner
+            with self.assertRaisesRegex(ValueError, 'ownership differs'):
+                self.render()
+            self.assertEqual(self.snapshot(), before)
+
+    def test_external_descriptor_rejects_leftover_identity_state(self):
+        self.render()
+        casdoor = self.runtime / 'casdoor'
+        casdoor.mkdir()
+        before = self.snapshot()
+        with self.assertRaisesRegex(ValueError, 'bundled identity state'):
+            self.render()
+        self.assertTrue(casdoor.exists())
+        self.assertEqual(self.snapshot(), before)
+        casdoor.rmdir()
+        password = self.runtime / 'secrets/db_password'
+        password.write_text('leftover-database-secret')
+        before = self.snapshot()
+        with self.assertRaisesRegex(ValueError, 'bundled identity state'):
+            self.render()
+        self.assertEqual(self.snapshot(), before)
+
+    def test_modified_generated_files_cannot_be_erased_by_rerender(self):
+        self.render()
+        compose = self.runtime / 'deploy/compose.yaml'
+        compose.write_text(compose.read_text() + '# operator edit\n')
+        before = self.snapshot()
+        with self.assertRaisesRegex(ValueError, 'configuration changed'):
+            self.render()
+        self.assertEqual(self.snapshot(), before)
+
+    def test_descriptor_requires_generated_configuration_checksums(self):
+        self.render()
+        descriptor_path = self.runtime / 'deployment.json'
+        descriptor = json.loads(descriptor_path.read_text())
+        descriptor['configuration_sha256'].pop('deploy/compose.yaml')
+        descriptor_path.write_text(json.dumps(descriptor))
+        before = self.snapshot()
+        with self.assertRaisesRegex(ValueError, 'omits generated configuration checksums'):
+            self.render()
+        self.assertEqual(self.snapshot(), before)
+
+    def test_template_upgrade_validates_old_files_then_updates_checksums(self):
+        import shutil
+        self.render()
+        old_descriptor = json.loads((self.runtime / 'deployment.json').read_text())
+        source = self.base / 'source'
+        shutil.copytree(ROOT / 'deploy', source / 'deploy')
+        for name in ('image-inputs.json', 'versions.lock.yaml'):
+            shutil.copyfile(ROOT / name, source / name)
+        template = source / 'deploy/Caddyfile'
+        template.write_text(template.read_text() + '# updated source template\n')
+        with patch.object(configure, 'SOURCE_ROOT', source):
+            self.render()
+        descriptor = json.loads((self.runtime / 'deployment.json').read_text())
+        self.assertNotEqual(descriptor['configuration_sha256']['deploy/Caddyfile'],
+                            old_descriptor['configuration_sha256']['deploy/Caddyfile'])
+        self.assertIn('# updated source template', (self.runtime / 'deploy/Caddyfile').read_text())
+        configure.verify_configuration(self.runtime, descriptor)
+
+
+    def test_legacy_directory_owner_change_requires_migration(self):
+        bundled = json.loads((ROOT / 'deploy/site.example.json').read_text())
+        configure.render(bundled, self.runtime)
+        (self.runtime / 'deployment.json').unlink()
+        bundled['directory_sync'] = {'owner': 'disabled'}
+        before = self.snapshot()
+        with self.assertRaisesRegex(ValueError, 'ownership is local'):
+            configure.render(bundled, self.runtime)
+        self.assertEqual(self.snapshot(), before)
