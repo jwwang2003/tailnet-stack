@@ -4,11 +4,10 @@ Start with the [core deployment guide](integrated-platform.md) for provider-neut
 The Feishu identity and synchronization sections below apply only when that
 optional adapter is enabled; backup, restore, and service operations apply to the core.
 
-This runbook uses the Compose deployment in `deploy/compose.yaml`. It separates
-local implementation checks from a live Feishu tenant pilot. The implementation
-environment had Python available, but no Docker daemon/client or Go toolchain;
-no successful container deployment, live OAuth login, or database restore is
-claimed by the local checks.
+This runbook uses `deploy/compose.yaml` with Docker Compose v2 semantics. The
+ARM64 candidate passes 188 integration tests, native builds, bundle verification
+and a Docker-host synthetic restore rehearsal. Full tenant lifecycle, public OIDC
+and device/session tests remain pending. See the [current review](production-readiness.md).
 
 ## Prepare a deployment host
 

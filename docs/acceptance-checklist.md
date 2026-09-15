@@ -4,10 +4,10 @@ For the core platform, validate the selected provider, stable OIDC identity, adm
 
 Record date, exact image digests/source lock, test environment, result, and evidence
 for each item. Fixture tests validate implementation behavior; they do not replace
-live Feishu permission, OAuth, or network tests. The development environment used
-for this implementation lacked Docker and Go, so container builds, live tenant
-OAuth, and a real database restore remain pending until exercised on a deployment
-host. Do not set `compatibility_verified: true` while these checks are pending.
+live Feishu permission, OAuth, or network tests. Sandbox builds, directory
+population and a Docker-host synthetic restore are recorded in the release
+evidence. Public OIDC, device/session tests and the actual production configuration
+still need site-specific evidence. Keep `compatibility_verified: false` until acceptance.
 
 ## Build and configuration
 
@@ -17,7 +17,8 @@ host. Do not set `compatibility_verified: true` while these checks are pending.
       commits for Headscale and Headplane; candidate images were built from those
       commits with recorded toolchains.
 - [ ] Every deployed image, including worker, database, and proxy, is pinned by
-      digest; the registry retains both candidate and previous release artifacts.
+      registry digest or a verified offline bundle image ID/alias; retain candidate
+      and prior artifacts. Bundle platform matches the actual server architecture.
 - [ ] Compose configuration and service-specific config validation succeed on the
       deployment host; public DNS/TLS and container file permissions are correct.
 - [ ] Initial administrator credentials are replaced, Headplane owner bootstrap

@@ -9,11 +9,12 @@ evidence.
 ## Release status
 
 `integrated-2026.09.0-rc.3` is a **release candidate, not production-ready**.
-The 168 local tests pass, the six-image bundle validates, and sandbox directory
-population and isolated restore are recorded. RC3 fixes the two revocation retry
-failures a follow-up review reproduced in RC2 (durable revocation journal and
-Casdoor marker, regression-tested); full Feishu lifecycle, public OIDC, and a
-two-device pilot remain incomplete. See the [release review and deployment sequence](docs/production-readiness.md).
+RC3 fixes the two revocation retry failures. The subsequent ARM64 candidate adds
+Casdoor sign-in hardening and build fixes; 188 integration tests, native builds,
+bundle verification and a Docker-host restore rehearsal pass. Full Feishu
+lifecycle, public OIDC and the two-device pilot remain incomplete. See the
+[release review and deployment sequence](docs/production-readiness.md) for the
+current source tuple, bundle and remaining gates.
 The promotion checker must pass after the evidence has been reviewed:
 
 ```sh

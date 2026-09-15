@@ -1,11 +1,97 @@
 # Release review and deployment sequence
 
-**Update (2026-09-14, later the same day):** both code blockers below are fixed in
-integration `cf8bf70` (RC3) with 45 regression tests, including independent
-reproductions of the two sequences; see the
-[RC3 validation record](../releases/2026.09-rc.3-validation.md). The review text
-below is kept as written for RC2 `7cf3f64`. The tenant, pilot and promotion gates
-still apply unchanged.
+## Gate execution follow-up
+
+The subsequent sub-agent audit found that the documented deployment server is
+ARM64, while the original RC3 bundle is amd64. Native candidate integration
+`292f2aa` pins Casdoor `9d982e2d` and Headplane `a0e18d8`; Headscale is unchanged.
+The original amd64 bundle is retained. **Production acceptance remains pending.**
+
+- Fresh tenant reads: 207 employees, 45 departments, zero complete employment
+  status records. Both requested Feishu scope grants are still missing.
+- Corrected the Casdoor hardener's unsupported Face ID field. Applied the
+  supported sign-in-method settings in the sandbox; recheck reports zero
+  pending changes and all eight ordinary-user authorization probes pass.
+- Added server-side WebAuthn application/user checks before session creation.
+  Five tests with 49 subcases pass, including genuine synthetic signed
+  assertions. Six negative controls reproduced unauthorized session creation
+  in the old handler. The new product revision must be deployed to enforce it.
+- The native integration suite passes 188 tests. Renderer defaults now follow
+  the source lock; Headplane's build stage enables Node's proxy support for
+  Corepack. All six native images built and the downloaded bundle passed
+  checksum/source/image checks. Docker-host recovery preserved all 44 PostgreSQL
+  tables and 16 runtime files, including signing material, Headscale keys,
+  Headplane's database and the pending journal. Restored application health
+  passed; all rehearsal containers are stopped.
+
+The verified bundle is available at
+`/mnt/c/Users/wjw/Downloads/fysics-bundle-2026.09-rc.3-arm64-01` and on the server
+under `/home/wjw/tailnet-rc3-arm64-20260914/`. Use its existing matching integration
+checkout there. Backup took 32.0 seconds and the restore script 3.9 seconds;
+application checks followed. An off-host copy of the synthetic backup is retained.
+
+The three documented public hostnames currently have no DNS records. Tenant
+grant/publication, confirmed DNS and public OIDC, reviewed ACLs and the physical
+two-device pilot still need operator/device participation. Detailed execution
+evidence is kept privately in `.runtime/local-wsl/audit/rc3-gate-execution.json`.
+The assessments below describe earlier checkpoints, not production approval.
+
+## Current assessment: RC3
+
+Independently rechecked integration `507db66` (fix `cf8bf70`), with unchanged
+product revisions. **The two RC2 code blockers are resolved; RC3 is ready for
+the staging acceptance run, not production promotion.** No new blocker was
+found in this focused review of revocation recovery and locking.
+
+| Recheck | Result |
+| --- | --- |
+| Integration suite | 180 tests pass, including 45 new regressions; shell syntax and whitespace checks pass |
+| Original partial-sync reproduction | Journal survives the second user's failed update; the next successful run expires Alice's nodes 11 and 12, writes the marker and clears the entry |
+| Original failed-offboarding reproduction | Same successful recovery after a Headscale node-listing outage |
+| Product source lock | All three checkouts match and are clean |
+| RC3 bundle | Archive SHA-256, commit/lock/input binding, six local image IDs, platforms and revision labels verified with Podman |
+| Promotion checker | Correctly rejects the candidate: `Release compatibility is not verified` |
+
+Review covered journal-before-block ordering, Casdoor marker recovery, legacy
+pending-state migration, full/staged retry, stale-marker clearing, and offboarding
+and watch locks. Product builds, live tenant mutations and the Docker-host
+restore were not rerun. Earlier results remain in the
+[RC3 validation record](../releases/2026.09-rc.3-validation.md) and its RC2 references.
+
+Use `/mnt/c/Users/wjw/Downloads/fysics-bundle-2026.09-rc.3-01`, bound to
+`507db66d1071a7ae2ecc6dfebffb330340e880ea`, for staging. Preserve that exact
+integration checkout when importing; the historical RC2 bundle below is superseded.
+Documentation edits made after this recheck do not change the existing bundle.
+
+Remaining steps, in order:
+
+1. Grant and publish `contact:user.employee:readonly` and
+   `contact:user.phone:readonly`; optionally grant `tenant:tenant:readonly` for
+   company verification. Run `--permissions` until `lifecycle_ready: true`.
+   Review mappings before the scheduled worker's automatic transition to full
+   lifecycle, then capture the first `mode: apply` report.
+2. Deploy staging with real DNS/TLS, both OIDC clients, a reviewed ACL and two
+   devices on different networks. Prove live node/key revocation for a test
+   employee, denied reauthentication and Headplane session expiry.
+3. Rehearse backup/restore on the Docker Compose v2 host. Record actual backup,
+   migration and rollback references; retain the revocation journal with state.
+4. Complete the manifest and promotion checks. The RC3 candidate's abbreviated
+   image aliases and null commit/bundle/configuration fields are placeholders:
+   copy full aliases and identities from the final bundle, and record successful
+   evidence rather than only changing the compatibility flag.
+
+Pending revocations are durable, but scheduled recovery still requires a run
+to reach reconciliation after directory reads and Casdoor import/update checks.
+If those dependencies keep failing during an incident, retry immediate
+offboarding or use the [manual revocation procedure](operations.md); do not infer
+device containment from a Casdoor block alone. On the first RC3 run, previously
+worker-blocked RC2 accounts without a completion marker are revoked once again.
+
+## Historical RC2 assessment
+
+The remainder preserves the original RC2 findings and deployment sequence.
+Its code blockers and test count describe `7cf3f64`, not RC3. Use the current
+assessment above when deciding whether to proceed.
 
 Reviewed 2026-09-14 at integration `7cf3f64`, Casdoor `fde2cf8f`, Headscale
 `59516776`, and Headplane `fb7ae3e`. **RC2 is suitable for continued staging
