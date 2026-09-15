@@ -182,19 +182,19 @@ Create an SWR organization and grant your IAM user push access. Export
 `HUAWEI_AK` and `HUAWEI_SK` in the shell running the script; use the original
 access-key pair, not the password copied from a generated login command.
 Environment files are not loaded automatically. Keep them outside Git; use
-`uv run --env-file .env python scripts/push-swr.py ...` to load one explicitly.
+`uv run --env-file .env python scripts/huawei-swr.py ...` to load one explicitly.
 Run `uv sync --locked` first to install Typer, Rich, and PyYAML into `.venv`.
 
 From the integration checkout, preview the six-image upload:
 
 ```sh
-uv run python scripts/push-swr.py --region cn-east-3 --organization YOUR_ORGANIZATION --dry-run
+uv run python scripts/huawei-swr.py --region cn-east-3 --organization YOUR_ORGANIZATION --dry-run
 ```
 
 Then upload:
 
 ```sh
-uv run python scripts/push-swr.py --region cn-east-3 --organization YOUR_ORGANIZATION
+uv run python scripts/huawei-swr.py --region cn-east-3 --organization YOUR_ORGANIZATION
 ```
 
 Alternatively export `SWR_REGION` and `SWR_ORG` and run the script without flags.
@@ -202,7 +202,7 @@ Typer provides formatted help and validates options; Rich displays the image
 plan, numbered upload stages, errors, and successful digest references. Docker's
 own layer progress remains visible. The executable shebang is
 `#!/usr/bin/env python`; after activating `.venv`, you can also run
-`./scripts/push-swr.py --help` directly.
+`./scripts/huawei-swr.py --help` directly.
 The region determines both `swr.REGION.myhuaweicloud.com` and the login username
 `REGION@AK`. An existing `SWR_REGISTRY` must match the selected region. This
 implements Huawei's **general long-term login** using HMAC-SHA256, with the

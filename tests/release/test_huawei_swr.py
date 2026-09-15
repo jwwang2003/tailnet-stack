@@ -16,7 +16,7 @@ from rich.console import Console
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'scripts'))
-spec = importlib.util.spec_from_file_location('push_swr', ROOT / 'scripts/push-swr.py')
+spec = importlib.util.spec_from_file_location('huawei_swr', ROOT / 'scripts/huawei-swr.py')
 swr = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(swr)
 

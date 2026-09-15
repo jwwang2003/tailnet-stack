@@ -84,7 +84,7 @@ environment and run the tools with:
 
 ```sh
 uv sync --locked
-uv run python scripts/push-swr.py --help
+uv run python scripts/huawei-swr.py --help
 uv run --locked bash scripts/test.sh
 ```
 
