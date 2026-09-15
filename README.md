@@ -1,10 +1,31 @@
-# Integrated Tailnet
+# Tailnet Stack
 
-Deployment configuration for a self-hosted tailnet built from Headscale,
-Headplane, Casdoor, Caddy, PostgreSQL, and an optional Feishu directory worker.
-The four source repositories stay separate; this repository owns the lock file,
-Compose files, build scripts, runtime renderer, worker, backups, and release
-evidence.
+A self-hosted private networking stack integrating Headscale, Headplane,
+Casdoor, Caddy, and PostgreSQL, with deployment tooling and optional identity
+and directory integrations. Feishu/Lark is the first implemented directory
+adapter; the core stack can also use Casdoor-managed accounts or another
+configured Casdoor login provider. Additional directory adapters require their
+own implementation and identity/lifecycle validation.
+
+The four source repositories stay separate. This repository owns the source
+lock, Compose files, build scripts, runtime renderer, directory worker, backups,
+and release evidence.
+
+## Source and branches
+
+The repository is [jwwang2003/tailnet-stack](https://github.com/jwwang2003/tailnet-stack).
+`main` is the provider-neutral integration development branch:
+
+```sh
+git clone --branch main git@github.com:jwwang2003/tailnet-stack.git
+cd tailnet-stack
+```
+
+Use `downstream/integrated-2026.09` for the current integration series and
+`release/integrated-2026.09-rc.*` for pinned release candidates. An `-arm64`
+suffix selects that candidate's ARM64 image configuration. Deploy the exact
+integration commit matching the images or bundle, rather than a moving `main`.
+Historical Feishu release refs remain available for existing deployments.
 
 ## Release status
 
@@ -26,6 +47,11 @@ python3 scripts/release.py verify-sources ..
 python3 scripts/release.py check-promotion .runtime/production-manifest.yaml \
   --bundle-manifest /path/to/bundle/manifest.json
 ```
+
+The repository rename does not rebuild or promote RC4. Existing RC4 bundles
+remain bound to their original integration commit and source-lock checksum;
+validate them from that exact checkout. The new repository URL in `main`'s
+lock is metadata for subsequent builds.
 
 ## Deploy
 

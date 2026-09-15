@@ -5,7 +5,7 @@ release:
   status: "candidate"
   downstream_branch: "downstream/integrated-2026.09"
   production_branch: "production/integrated-2026.09"
-  integration_repository: "https://github.com/jwwang2003/tailscale-feishu-integration"
+  integration_repository: "https://github.com/jwwang2003/tailnet-stack"
   compatibility_verified: false
 components:
   headscale:

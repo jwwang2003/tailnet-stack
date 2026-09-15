@@ -2,7 +2,7 @@
 
 **Recommended:** [build on Windows and transfer a six-image bundle over SSH](local-build-deploy.md). That path replaces remote source builds and needs no paid registry. Return to step 7 below for application setup, using the offline Compose overlay from that guide.
 
-For a deployment without Feishu, start with the [Integrated Tailnet deployment guide](integrated-platform.md). This recipe enables the optional Feishu login and directory adapter; its provider credentials and permissions are required only for this recipe.
+For a deployment without Feishu, start with the [Tailnet Stack deployment guide](integrated-platform.md). This recipe enables the optional Feishu login and directory adapter; its provider credentials and permissions are required only for this recipe.
 
 This guide takes a **new Ubuntu 24.04 server** from an empty installation to a pilot with Feishu login, Casdoor user synchronization, Headscale device enrollment, and Headplane administration. Match the source lock and image bundle to the server's architecture. Run server commands as the same non-root deployment user throughout. Steps explicitly marked **laptop** or **browser** run elsewhere.
 
@@ -69,7 +69,7 @@ If the laptop does not have the repository, download the helper using your local
 
 ```sh
 curl --fail --location --proxy http://127.0.0.1:7890 \
-  https://raw.githubusercontent.com/jwwang2003/tailscale-feishu-integration/release/integrated-2026.09-rc.4/scripts/remote-proxy-shell.sh \
+  https://raw.githubusercontent.com/jwwang2003/tailnet-stack/release/integrated-2026.09-rc.4/scripts/remote-proxy-shell.sh \
   -o remote-proxy-shell.sh
 less remote-proxy-shell.sh
 bash remote-proxy-shell.sh wjw@YOUR_SERVER_IP
@@ -101,7 +101,7 @@ SSH aliases and identity/jump-host settings from `~/.ssh/config` work. The scrip
 printf 'Proxy: %s\n' "$https_proxy"
 ss -ltn '( sport = :17890 )'
 curl --head --fail --max-time 20 https://github.com
-git ls-remote https://github.com/jwwang2003/tailscale-feishu-integration.git refs/heads/release/integrated-2026.09-rc.4
+git ls-remote https://github.com/jwwang2003/tailnet-stack.git refs/heads/release/integrated-2026.09-rc.4
 ```
 
 Expected: proxy URL `http://127.0.0.1:17890`, a loopback listener, an HTTPS response, and a Git commit/ref. Adjust the `ss` port if you selected another port. If forwarding fails, confirm the local proxy is running, the remote port is unused, and SSH server policy permits remote TCP forwarding. Keep `GatewayPorts` disabled or `clientspecified`; do not force wildcard listeners. No cloud firewall opening for port 17890 is needed.
@@ -169,8 +169,8 @@ cd "$HOME/tailscale-open"
 git clone --branch release/integrated-2026.09-rc.4 https://github.com/jwwang2003/headscale.git
 git clone --branch release/integrated-2026.09-rc.4 https://github.com/jwwang2003/headplane.git
 git clone --branch release/integrated-2026.09-rc.4 https://github.com/jwwang2003/casdoor.git
-git clone --branch release/integrated-2026.09-rc.4 https://github.com/jwwang2003/tailscale-feishu-integration.git
-cd tailscale-feishu-integration
+git clone --branch release/integrated-2026.09-rc.4 https://github.com/jwwang2003/tailnet-stack.git
+cd tailnet-stack
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install -r requirements-build.txt
@@ -185,14 +185,14 @@ For server repositories cloned earlier with SSH, change only their origin URLs (
 
 ```sh
 cd "$HOME/tailscale-open"
-for repo in headscale headplane casdoor tailscale-feishu-integration; do
+for repo in headscale headplane casdoor tailnet-stack; do
   git -C "$repo" remote set-url origin "https://github.com/jwwang2003/$repo.git"
   git -C "$repo" remote get-url origin
 done
-cd tailscale-feishu-integration
+cd tailnet-stack
 ```
 
-All remaining **server** commands run from `~/tailscale-open/tailscale-feishu-integration` unless stated otherwise.
+All remaining **server** commands run from `~/tailscale-open/tailnet-stack` unless stated otherwise.
 
 ## 5. Generate the private runtime configuration
 

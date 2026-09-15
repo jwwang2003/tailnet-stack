@@ -2,7 +2,7 @@
 
 **Using Podman instead of Docker Desktop? Follow [the Podman build guide](podman-build.md) for local setup/build/export, then use the shared transfer and server-import steps here.**
 
-This is the preferred initial deployment path for Integrated Tailnet. You do not need to buy ACR or set up any registry. Windows performs the builds and downloads. The server receives six finished Linux images plus metadata, then starts them with the existing runtime configuration.
+This is the preferred initial deployment path for Tailnet Stack. You do not need to buy ACR or set up any registry. Windows performs the builds and downloads. The server receives six finished Linux images plus metadata, then starts them with the existing runtime configuration.
 
 The bundle contains **Headscale, Headplane, Casdoor, the Feishu worker, PostgreSQL, and Caddy**. It contains no `.runtime` directory, application credentials, database contents, or TLS private keys. Application configuration and first-time Casdoor setup still happen on the server. The bundled Feishu worker is optional and remains stopped unless the `sync` profile or worker service is explicitly selected.
 
@@ -59,8 +59,8 @@ cd "$HOME/tailscale-open"
 git clone --branch release/integrated-2026.09-rc.4 https://github.com/jwwang2003/headscale.git
 git clone --branch release/integrated-2026.09-rc.4 https://github.com/jwwang2003/headplane.git
 git clone --branch release/integrated-2026.09-rc.4 https://github.com/jwwang2003/casdoor.git
-git clone --branch release/integrated-2026.09-rc.4 https://github.com/jwwang2003/tailscale-feishu-integration.git
-cd tailscale-feishu-integration
+git clone --branch release/integrated-2026.09-rc.4 https://github.com/jwwang2003/tailnet-stack.git
+cd tailnet-stack
 python3 -m venv .venv
 . .venv/bin/activate
 python3 -m pip install -r requirements-build.txt
@@ -143,7 +143,7 @@ The server needs Docker Engine/Compose and Python 3.11+, plus this integration r
 If the integration checkout already exists:
 
 ```sh
-cd "$HOME/tailscale-open/tailscale-feishu-integration"
+cd "$HOME/tailscale-open/tailnet-stack"
 git fetch origin release/integrated-2026.09-rc.4
 ```
 

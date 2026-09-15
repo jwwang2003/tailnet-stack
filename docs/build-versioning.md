@@ -1,5 +1,12 @@
 # Build, versioning, and release workflow
 
+The integration repository is `jwwang2003/tailnet-stack`. Its `main` branch
+contains provider-neutral development; `downstream/integrated-2026.09` tracks
+the integration series. Product forks retain their own branch names and exact
+source pins. Release branches and commit IDs stay fixed for reproducible
+deployment, including historical Feishu releases. See
+[naming and migration](branding-migration.md) when updating an existing checkout.
+
 `versions.lock.yaml` is the shared source of truth for the source tuple. An upstream
 tag identifies the official base; `upstream_commit` is its peeled commit and
 `source_commit` is the exact downstream commit that will be built. Keeping both
@@ -110,7 +117,7 @@ the commit and downstream version with `source_commit` and the approved release
 version before executing:
 
 ```sh
-git worktree add --detach ../build-headscale-integrated-2026.09 "$(python3 ../tailscale-feishu-integration/scripts/release.py field headscale source_commit)"
+git worktree add --detach ../build-headscale-integrated-2026.09 "$(python3 ../tailnet-stack/scripts/release.py field headscale source_commit)"
 cd ../build-headscale-integrated-2026.09
 git status --short
 git rev-parse HEAD

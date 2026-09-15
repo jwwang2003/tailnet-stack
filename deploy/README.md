@@ -1,4 +1,4 @@
-# Integrated Tailnet deployment boundaries
+# Tailnet Stack deployment boundaries
 
 Start with the [provider-neutral deployment guide](../docs/integrated-platform.md).
 The core is Headscale, Headplane, Casdoor, PostgreSQL, and Caddy. The Feishu

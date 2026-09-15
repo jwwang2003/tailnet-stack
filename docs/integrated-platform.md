@@ -1,4 +1,4 @@
-# Deploy Integrated Tailnet
+# Deploy Tailnet Stack
 
 The core is Headscale, Headplane, Casdoor, PostgreSQL, and Caddy. Casdoor supplies
 OIDC to both network services and can use locally managed accounts or a configured

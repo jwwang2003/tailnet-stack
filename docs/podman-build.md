@@ -26,7 +26,7 @@ This prerequisite is already fixed on the current workstation. No Docker Desktop
 From the local WSL integration checkout:
 
 ```sh
-cd ~/workspace/development/tailscale-open/tailscale-feishu-integration
+cd ~/workspace/development/tailscale-open/tailnet-stack
 git pull --ff-only
 source .venv/bin/activate
 python3 -c 'import yaml; print("Python ready")'

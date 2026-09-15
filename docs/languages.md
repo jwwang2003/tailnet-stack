@@ -1,6 +1,6 @@
 # English and 简体中文
 
-Integrated Tailnet retains each upstream application's identity. Its language
+Tailnet Stack retains each upstream application's identity. Its language
 controls translate interface text, not employee names, device names, policy code,
 provider names, or other administrator-entered data. English is the fallback for
 new upstream messages that do not yet have a translation. Feishu remains a named

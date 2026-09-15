@@ -209,7 +209,7 @@ worker and export a new bundle from the corrected, committed candidate.
    and internal service ports private. For a new site:
 
    ```sh
-   cd /path/to/tailscale-feishu-integration
+   cd /path/to/tailnet-stack
    umask 077
    mkdir -p .runtime
    cp deploy/site.example.json .runtime/site.json
