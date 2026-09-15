@@ -113,3 +113,155 @@ class ConfigureTests(unittest.TestCase):
             hp = json.loads((root / 'headplane/config.yaml').read_text())
             self.assertTrue(hp['oidc']['disable_api_key_login'])
             self.assertEqual(hp['server']['cookie_max_age'], 300)
+
+
+class ExternalConfigureTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.base = Path(self.temporary.name)
+        self.runtime = self.base / 'runtime'
+        self.site = json.loads((ROOT / 'deploy/site.external.example.json').read_text())
+        self.hs_secret = self.base / 'hs-secret'
+        self.hp_secret = self.base / 'hp-secret'
+        self.hs_secret.write_text('registered-headscale-secret\n')
+        self.hp_secret.write_text('registered-headplane-secret\n')
+
+    def render(self, **kwargs):
+        return configure.render(self.site, self.runtime,
+                                headscale_client_secret_file=self.hs_secret,
+                                headplane_client_secret_file=self.hp_secret, **kwargs)
+
+    def snapshot(self):
+        return {str(path.relative_to(self.runtime)): path.read_bytes()
+                for path in self.runtime.rglob('*') if path.is_file()}
+
+    def test_external_owns_only_tailnet_configuration(self):
+        self.site['identity']['issuer'] = 'https://login.example.com/identity/'
+        self.render()
+        for name in ('casdoor', 'sync', 'secrets/db_password', 'secrets/feishu_app_secret'):
+            self.assertFalse((self.runtime / name).exists(), name)
+        for name, secret in (('headscale', 'registered-headscale-secret'),
+                             ('headplane', 'registered-headplane-secret')):
+            config = yaml.safe_load((self.runtime / name / 'config.yaml').read_text())
+            self.assertEqual(config['oidc']['issuer'], self.site['identity']['issuer'])
+            self.assertEqual((self.runtime / 'secrets' / f'{name}_oidc_secret').read_text(), secret)
+        env = (self.runtime / 'compose.env').read_text()
+        for name in ('CASDOOR_', 'POSTGRES_', 'WORKER_'):
+            self.assertNotIn(name, env)
+        for name in ('compose.yaml', 'compose.offline.yaml'):
+            compose = yaml.safe_load((self.runtime / 'deploy' / name).read_text())
+            self.assertEqual(set(compose['services']), {'headscale', 'headplane', 'proxy'})
+            self.assertNotIn('casdoor', json.dumps(compose))
+            self.assertNotIn('db_password', json.dumps(compose))
+        proxy = yaml.safe_load((self.runtime / 'deploy/compose.yaml').read_text())['services']['proxy']
+        self.assertIn('./Caddyfile:/etc/caddy/Caddyfile:ro', proxy['volumes'])
+        self.assertNotIn('CASDOOR_HOST', (self.runtime / 'deploy/Caddyfile').read_text())
+        self.assertNotIn('login.example.com', (self.runtime / 'deploy/Caddyfile').read_text())
+
+    def test_descriptor_binds_generated_files_without_binding_operator_state(self):
+        import hashlib
+        self.render()
+        descriptor = json.loads((self.runtime / 'deployment.json').read_text())
+        self.assertEqual(descriptor['identity'], self.site['identity'])
+        self.assertEqual(descriptor['directory_sync'], {'owner': 'external'})
+        self.assertEqual(set(descriptor['configuration_sha256']),
+                         {'deploy/compose.yaml', 'deploy/compose.offline.yaml', 'deploy/Caddyfile'})
+        for name, digest in descriptor['configuration_sha256'].items():
+            self.assertEqual(hashlib.sha256((self.runtime / name).read_bytes()).hexdigest(), digest)
+        self.assertNotIn('registered-headscale-secret', json.dumps(descriptor))
+
+    def test_missing_invalid_or_shared_credentials_fail_before_writes(self):
+        with self.assertRaisesRegex(ValueError, 'requires an existing'):
+            configure.render(self.site, self.runtime)
+        self.assertFalse(self.runtime.exists())
+        for value in ('', ' ', 'invalid\nsecret', self.hs_secret.read_text()):
+            with self.subTest(secret=value):
+                self.hp_secret.write_text(value)
+                with self.assertRaises(ValueError):
+                    self.render()
+                self.assertFalse(self.runtime.exists())
+
+    def test_rerender_preserves_credentials_and_rejects_rotation(self):
+        self.render()
+        before = self.snapshot()
+        configure.render(self.site, self.runtime)
+        self.assertEqual(self.snapshot(), before)
+        self.hs_secret.write_text('replacement-secret')
+        with self.assertRaisesRegex(ValueError, 'rotation is separate'):
+            self.render()
+        self.assertEqual(self.snapshot(), before)
+
+    def test_identity_changes_fail_without_partial_writes(self):
+        self.render()
+        before = self.snapshot()
+        for identity in ({'mode': 'external', 'issuer': 'https://another.example.com'},
+                         {'mode': 'bundled'}):
+            self.site['identity'] = identity
+            self.site['casdoor_host'] = 'login.example.com'
+            with self.assertRaisesRegex(ValueError, 'migration required'):
+                self.render()
+            self.assertEqual(self.snapshot(), before)
+
+    def test_legacy_runtime_cannot_switch_mode_or_issuer(self):
+        bundled = json.loads((ROOT / 'deploy/site.example.json').read_text())
+        configure.render(bundled, self.runtime)
+        (self.runtime / 'deployment.json').unlink()
+        before = self.snapshot()
+        with self.assertRaisesRegex(ValueError, 'Legacy runtime is bundled'):
+            self.render()
+        bundled['casdoor_host'] = 'another.example.com'
+        with self.assertRaisesRegex(ValueError, 'issuer differs'):
+            configure.render(bundled, self.runtime)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_directory_ownership_controls_worker_only(self):
+        for owner in ('local', 'external', 'disabled'):
+            with self.subTest(owner=owner):
+                self.runtime = self.base / owner
+                self.site['directory_sync'] = {'owner': owner}
+                self.render()
+                compose = yaml.safe_load((self.runtime / 'deploy/compose.yaml').read_text())
+                offline = yaml.safe_load((self.runtime / 'deploy/compose.offline.yaml').read_text())
+                self.assertEqual('worker' in compose['services'], owner == 'local')
+                self.assertEqual('worker' in offline['services'], owner == 'local')
+                self.assertEqual((self.runtime / 'sync/state').exists(), owner == 'local')
+                self.assertNotIn('casdoor', compose['services'])
+                self.assertFalse((self.runtime / 'sync/sync.json').exists())
+                if owner == 'local':
+                    self.assertEqual(compose['services']['worker']['profiles'], ['sync'])
+
+    def test_invalid_descriptor_fails_before_writes(self):
+        self.render()
+        path = self.runtime / 'deployment.json'
+        descriptor = json.loads(path.read_text())
+        descriptor['services'].append('casdoor')
+        path.write_text(json.dumps(descriptor))
+        before = self.snapshot()
+        with self.assertRaises(ValueError):
+            self.render()
+        self.assertEqual(self.snapshot(), before)
+
+    def test_external_does_not_require_bundled_image_catalog_entries(self):
+        import shutil
+        source = self.base / 'source'
+        shutil.copytree(ROOT / 'deploy', source / 'deploy')
+        lock = yaml.safe_load((ROOT / 'versions.lock.yaml').read_text())
+        del lock['components']['casdoor']
+        (source / 'versions.lock.yaml').write_text(yaml.safe_dump(lock))
+        inputs = json.loads((ROOT / 'image-inputs.json').read_text())
+        for name in ('database', 'sync'):
+            inputs['images'].pop(name)
+        (source / 'image-inputs.json').write_text(json.dumps(inputs))
+        with patch.object(configure, 'SOURCE_ROOT', source):
+            self.render()
+
+    def test_bundled_generated_topology_preserves_legacy_services(self):
+        bundled = json.loads((ROOT / 'deploy/site.example.json').read_text())
+        configure.render(bundled, self.runtime)
+        for name in ('compose.yaml', 'compose.offline.yaml'):
+            expected = yaml.safe_load((ROOT / 'deploy' / name).read_text())
+            actual = yaml.safe_load((self.runtime / 'deploy' / name).read_text())
+            self.assertEqual(actual, expected)
+        self.assertEqual((self.runtime / 'deploy/Caddyfile').read_text(),
+                         (ROOT / 'deploy/Caddyfile').read_text())
