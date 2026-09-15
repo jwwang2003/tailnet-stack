@@ -79,7 +79,8 @@ private client secrets, and `deploy/compose.yaml`, `deploy/compose.offline.yaml`
 `deploy/Caddyfile`. The descriptor records exact identity ownership and the
 selected deployment-file checksums. It excludes secrets and mutable policy from
 its checksum map. Rerender preserves existing credentials, policy and image pins;
-changing mode or issuer requires an explicit migration outside this workflow.
+changing mode, issuer, directory ownership, or an existing external client ID
+requires an explicit migration outside this workflow.
 
 External Compose physically omits Casdoor, PostgreSQL, their volumes/secrets,
 and the login-host reverse-proxy route. With externally owned synchronization it
@@ -193,8 +194,8 @@ A restored copy must never become a second active directory synchronizer.
 Legacy bundled archives keep their existing database restore procedure.
 
 ```sh
-uv run bash scripts/backup.sh .runtime/external /private/backups/tailnet-external.tar.gz
-uv run bash scripts/restore.sh /private/backups/tailnet-external.tar.gz \
+uv run --locked bash scripts/backup.sh .runtime/external /private/backups/tailnet-external.tar.gz
+uv run --locked bash scripts/restore.sh /private/backups/tailnet-external.tar.gz \
   /private/inventory/versions.lock.yaml .runtime/external-restored \
   tailnet-external-restored --expected-mode external
 ```

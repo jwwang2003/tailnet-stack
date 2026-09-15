@@ -7,7 +7,11 @@ output_directory=${2:-"$integration_root/dist/headscale"}
 release_version=${HEADSCALE_VERSION:-v0.29.3-integrated.1}
 
 command -v go >/dev/null || { echo 'Install the Go toolchain from headscale/go.mod before building.' >&2; exit 1; }
-python3 "$integration_root/scripts/release.py" verify-sources "$workspace"
+release_args=()
+if [[ -n "${DEPLOYMENT_FILE:-}" ]]; then
+  release_args+=(--deployment "$DEPLOYMENT_FILE")
+fi
+python3 "$integration_root/scripts/release.py" "${release_args[@]}" verify-sources "$workspace"
 mkdir -p -- "$output_directory"
 output_directory=$(cd -- "$output_directory" && pwd)
 cd -- "$workspace/headscale"
