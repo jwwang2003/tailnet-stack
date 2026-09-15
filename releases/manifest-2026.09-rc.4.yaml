@@ -1,0 +1,55 @@
+# Integrated 2026.09 RC4 candidate manifest. Validation entries use the
+# mapping form the promotion checker requires; passed: false marks evidence
+# still to be observed on the staging/production site.
+schema_version: 1
+release: "integrated-2026.09.0-rc.4"
+distribution: "offline"
+integration_commit: null  # the release commit; filled at promotion
+versions_lock_sha256: "4eb23ca3e8d9be72282b662eb9b9a39ff7172bf775dc51c8fa0964f093e84f5e"
+bundle_sha256: null  # recorded in the private inventory at export
+bundle_reference: "fysics-bundle-2026.09-rc.4-01"
+created_at_utc: "2026-09-15T03:39:39Z"
+platform: "linux/amd64"
+images:
+  headscale: "offline/tailnet-headscale:sha256-3742645045f0"
+  headplane: "offline/tailnet-headplane:sha256-a5b4521aa9ec"
+  casdoor: "offline/tailnet-casdoor:sha256-8c9c75739cf3"
+  sync: null  # labelled with the release commit; see the bundle manifest
+  reverse_proxy: "offline/tailnet-reverse-proxy:sha256-aac61abc4024"
+  database: "offline/tailnet-database:sha256-d741b3768746"
+configuration_sha256: {}
+toolchains:
+  casdoor: "golang:1.25.8, node:20.20.1 (Dockerfile stages), podman 4.9.3 rootless, linux/amd64; commit 9d982e2d"
+  sync: "python:3.12.11-slim"
+  headscale: "golang:1.26.5 builder, distroless static, linux/amd64; restructured series 905ad57f"
+  headplane: "golang:1.26.6 and node:24-slim builders, distroless nodejs24, linux/amd64; restructured series d5f4be6"
+migrations:
+  headscale: null
+  headplane: null
+  casdoor: null
+validation:
+  oauth_and_identity_linking:
+    passed: false
+    evidence: "pending staging login with both OIDC clients"
+  directory_lifecycle:
+    passed: false
+    evidence: "staged population only (207/207 users, releases/2026.09-rc.2-validation.md); full lifecycle waits for contact:user.employee:readonly"
+  headscale_and_headplane_oidc:
+    passed: false
+    evidence: "pending staging site with public DNS/TLS"
+  existing_access_revocation:
+    passed: false
+    evidence: "fixture proof of both retry paths (releases/2026.09-rc.3-validation.md); API-level preauth-key expiry verified; live node expiry pending an enrolled pilot device"
+  isolated_restore:
+    passed: true
+    evidence: "2026-09-14 isolated rehearsal, backup 6.6 s, restore 13.1 s, data identical (releases/2026.09-rc.2-validation.md); repeat on the Docker Compose v2 host at acceptance"
+  ordinary_user_authorization:
+    passed: true
+    evidence: "scripts/verify-casdoor-authz.py 8/8 on casdoor 9d982e2d (releases/2026.09-rc.4-validation.md); WebAuthn policy tests pass"
+backup:
+  reference: null
+  restored_successfully_at_utc: null
+rollback:
+  prior_release: "integrated-2026.09-rc.3"
+  prior_images_retained: true
+  pre_migration_backup_reference: null

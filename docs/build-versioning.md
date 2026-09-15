@@ -47,6 +47,36 @@ branch. Change the integration lock in one commit after all component refs are
 known; the Git SHA of that lock commit identifies the complete candidate. Keep
 the old manifest and images available for rollback.
 
+## Downstream patch series layout
+
+Each fork carries a short linear series on top of its official tag. Keep the
+patches separate so that each can be reviewed, replaced or retired on its own
+when the baseline moves; the retirement condition is part of the commit message.
+
+| Fork | Patch | Retire when |
+| --- | --- | --- |
+| Headscale | Pure upstream backports (PKCE method validation, provider context timeout, callback CSRF/state hardening), one commit each naming the upstream SHA | The new baseline contains that SHA; skip the commit during replay |
+| Headscale | Atomic callback-state consumption (our delta, tests in `oidc_state_test.go` and `types/config_oidc_test.go`) | Upstream checks the cache `Remove` result |
+| Headscale | Version override for downstream clients | Never automatically; keep small |
+| Headscale | Localization infrastructure (`templates/auth_locale.go`, one insertion in the shared body helper) | Upstream ships a language control |
+| Headscale | Translated authentication labels (literals wrapped at their call sites; helper signatures unchanged) | Expect a few label-site conflicts when upstream rewrites those pages |
+| Headscale | Form attribute escaping helper (`templates/attr.go`) | The HTML library escapes attributes itself |
+| Headplane | i18n infrastructure (`app/i18n`, provider, format helpers, translation coverage test) | Upstream ships localization |
+| Headplane | Shared components translate their own copy props | With the infrastructure |
+| Headplane | Translated screens, one commit per area (chrome, login, machines, users, DNS, settings, ACL, SSH); literal-to-call replacements only | Rebase each area separately; the coverage test flags wording drift |
+| Headplane | Language selector placement (one header insertion) | Upstream ships a selector |
+| Headplane | Branding (`app/components/organization-brand.tsx`, `app/server/branding.server.ts`, one header insertion) | Upstream ships configurable branding |
+| Headplane | Docs, changelog and build changes | With the feature they document |
+| Casdoor | OAuth/directory identity alignment, Lark cursor encoding, Chinese profile labels, partial-update snapshot fix (`object/user_clone.go`) | Upstream fixes the same defect; compare before dropping |
+
+On an upstream bump, replay the series in order with `git rebase --onto <new tag>
+<old tag> <branch>`, skip retired backports explicitly (patch ids differ after
+adaptation, so Git will not drop them for you), rerun the fork's focused tests,
+the Headplane coverage test, the worker suite and the Casdoor authorization
+probe, then update the lock in one commit. The restructuring measured on
+2026-09-15 against the upstream `main` branches of that day reduced replay
+conflicts from 35 to 6 hunks for Headscale and from 5 to 1 for Headplane.
+
 ## Build Headscale from the exact source
 
 The integration helpers require Python 3 and PyYAML. Install

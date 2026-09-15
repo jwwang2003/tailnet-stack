@@ -4,9 +4,9 @@
 
 For a deployment without Feishu, start with the [Integrated Tailnet deployment guide](integrated-platform.md). This recipe enables the optional Feishu login and directory adapter; its provider credentials and permissions are required only for this recipe.
 
-This guide takes a **new Ubuntu 24.04 x86-64 server** from an empty installation to a pilot with Feishu login, Casdoor user synchronization, Headscale device enrollment, and Headplane administration. Run server commands as the same non-root deployment user throughout. Steps explicitly marked **laptop** or **browser** run elsewhere.
+This guide takes a **new Ubuntu 24.04 server** from an empty installation to a pilot with Feishu login, Casdoor user synchronization, Headscale device enrollment, and Headplane administration. Match the source lock and image bundle to the server's architecture. Run server commands as the same non-root deployment user throughout. Steps explicitly marked **laptop** or **browser** run elsewhere.
 
-This is the `2026.09-rc.3` candidate deployment. The sandbox populated 207 Casdoor accounts, passed the authorization probe and an isolated restore rehearsal, and produced a validated six-image bundle. Production remains blocked by two reproduced revocation retry failures, missing Feishu scopes, and the public DNS/TLS and device pilot. Start with the [release review and deployment sequence](production-readiness.md); the steps below prepare a staging site. Keep the pinned patched images.
+RC3 fixes the two revocation retry failures. The subsequent ARM64 candidate adds Casdoor sign-in hardening and passes native builds, bundle verification and Docker-host recovery checks. Production still needs published Feishu scopes, public DNS/TLS and OIDC, and the device/session pilot. Use the matching bundle checkout in the [current gate record](production-readiness.md); the original RC3 amd64 archive does not match the documented ARM64 host. These steps prepare staging, not production promotion.
 
 ## 1. Fill in your deployment worksheet
 
@@ -69,7 +69,7 @@ If the laptop does not have the repository, download the helper using your local
 
 ```sh
 curl --fail --location --proxy http://127.0.0.1:7890 \
-  https://raw.githubusercontent.com/jwwang2003/tailscale-feishu-integration/release/integrated-2026.09-rc.3/scripts/remote-proxy-shell.sh \
+  https://raw.githubusercontent.com/jwwang2003/tailscale-feishu-integration/release/integrated-2026.09-rc.4/scripts/remote-proxy-shell.sh \
   -o remote-proxy-shell.sh
 less remote-proxy-shell.sh
 bash remote-proxy-shell.sh wjw@YOUR_SERVER_IP
@@ -101,7 +101,7 @@ SSH aliases and identity/jump-host settings from `~/.ssh/config` work. The scrip
 printf 'Proxy: %s\n' "$https_proxy"
 ss -ltn '( sport = :17890 )'
 curl --head --fail --max-time 20 https://github.com
-git ls-remote https://github.com/jwwang2003/tailscale-feishu-integration.git refs/heads/release/integrated-2026.09-rc.3
+git ls-remote https://github.com/jwwang2003/tailscale-feishu-integration.git refs/heads/release/integrated-2026.09-rc.4
 ```
 
 Expected: proxy URL `http://127.0.0.1:17890`, a loopback listener, an HTTPS response, and a Git commit/ref. Adjust the `ss` port if you selected another port. If forwarding fails, confirm the local proxy is running, the remote port is unused, and SSH server policy permits remote TCP forwarding. Keep `GatewayPorts` disabled or `clientspecified`; do not force wildcard listeners. No cloud firewall opening for port 17890 is needed.
@@ -135,7 +135,7 @@ printf '%s\n' \
   'URIs: https://download.docker.com/linux/ubuntu' \
   'Suites: noble' \
   'Components: stable' \
-  'Architectures: amd64' \
+  "Architectures: $(dpkg --print-architecture)" \
   'Signed-By: /etc/apt/keyrings/docker.asc' \
   | sudo tee /etc/apt/sources.list.d/docker.sources >/dev/null
 sudo apt-get update
@@ -166,10 +166,10 @@ For a **new server checkout**:
 ```sh
 mkdir -p "$HOME/tailscale-open"
 cd "$HOME/tailscale-open"
-git clone --branch release/integrated-2026.09-rc.3 https://github.com/jwwang2003/headscale.git
-git clone --branch release/integrated-2026.09-rc.3 https://github.com/jwwang2003/headplane.git
-git clone --branch release/integrated-2026.09-rc.3 https://github.com/jwwang2003/casdoor.git
-git clone --branch release/integrated-2026.09-rc.3 https://github.com/jwwang2003/tailscale-feishu-integration.git
+git clone --branch release/integrated-2026.09-rc.4 https://github.com/jwwang2003/headscale.git
+git clone --branch release/integrated-2026.09-rc.4 https://github.com/jwwang2003/headplane.git
+git clone --branch release/integrated-2026.09-rc.4 https://github.com/jwwang2003/casdoor.git
+git clone --branch release/integrated-2026.09-rc.4 https://github.com/jwwang2003/tailscale-feishu-integration.git
 cd tailscale-feishu-integration
 python3 -m venv .venv
 . .venv/bin/activate
@@ -254,10 +254,10 @@ If registry access requires your Windows proxy, complete [the Docker tunnel setu
 
 ```sh
 bash scripts/build-products.sh ..
-docker image inspect tailnet/headscale:2026.09-rc.3 --format '{{.Id}}'
-docker image inspect tailnet/headplane:2026.09-rc.3 --format '{{.Id}}'
-docker image inspect tailnet/casdoor:2026.09-rc.3 --format '{{.Id}}'
-docker image inspect tailnet/sync:2026.09-rc.3 --format '{{.Id}}'
+docker image inspect tailnet/headscale:2026.09-rc.4 --format '{{.Id}}'
+docker image inspect tailnet/headplane:2026.09-rc.4 --format '{{.Id}}'
+docker image inspect tailnet/casdoor:2026.09-rc.4 --format '{{.Id}}'
+docker image inspect tailnet/sync:2026.09-rc.4 --format '{{.Id}}'
 ```
 
 Each inspect command should print an image ID. The script checks clean, matching source commits before building. Go, Node, and frontend build tools run inside the builders; a host Go installation is not required for this image path.

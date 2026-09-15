@@ -8,11 +8,14 @@ evidence.
 
 ## Release status
 
-`integrated-2026.09.0-rc.3` is a **release candidate, not production-ready**.
-RC3 fixes the two revocation retry failures. The subsequent ARM64 candidate adds
-Casdoor sign-in hardening and build fixes; 188 integration tests, native builds,
-bundle verification and a Docker-host restore rehearsal pass. Full Feishu
-lifecycle, public OIDC and the two-device pilot remain incomplete. See the
+`integrated-2026.09.0-rc.4` is a **release candidate, not production-ready**.
+It combines the ARM64 candidate's fixes (Casdoor WebAuthn policy enforcement,
+corrected sign-in hardening, renderer defaults from the source lock, Headplane's
+Corepack proxy build fix) with restructured Headscale and Headplane downstream
+patch series for cheaper upstream rebases; behaviour is unchanged. 188 integration
+tests pass, the six-image bundle validates, and sandbox directory population and
+restore rehearsals are recorded. Full Feishu lifecycle, public OIDC and the
+two-device pilot remain incomplete. See the
 [release review and deployment sequence](docs/production-readiness.md) for the
 current source tuple, bundle and remaining gates.
 The promotion checker must pass after the evidence has been reviewed:
