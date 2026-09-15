@@ -21,6 +21,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import HTTPCookieProcessor, HTTPRedirectHandler, Request, build_opener
 
+from deployment import load_deployment
+
 
 class NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
@@ -62,15 +64,28 @@ def main(argv=None):
     parser.add_argument("--config", required=True, help="worker configuration with Casdoor service credentials")
     parser.add_argument("--public-url", help="Casdoor origin for the employee session (default: worker casdoor.base_url)")
     parser.add_argument("--keep", action="store_true", help="keep the temporary objects for inspection")
+    parser.add_argument("--deployment", type=Path, help="Deployment descriptor for shared identity boundaries")
+    parser.add_argument("--application", help="OWNER/NAME of the application used as the synthetic probe template")
+    parser.add_argument("--fixture-organization", help="Explicitly select the organization in which temporary fixtures may be created")
     args = parser.parse_args(argv)
+    deployment = load_deployment(args.deployment)
+    external = deployment['identity']['mode'] == 'external'
+    if external and (not args.application or not args.fixture_organization):
+        parser.error('External identity probes require --application and --fixture-organization')
     config = json.loads(Path(args.config).read_text())
     organization = config["casdoor"]["organization"]
+    if args.fixture_organization and args.fixture_organization != organization:
+        parser.error('Fixture organization must match the explicitly configured organization')
     admin = Admin(config)
     public = (args.public_url or config["casdoor"]["base_url"]).rstrip("/")
     tag = secrets.token_hex(4)
     app_name, group_name, user_name = f"authz-probe-{tag}", f"authz-probe-group-{tag}", f"authz-probe-{tag}"
     password = secrets.token_urlsafe(24)
-    template = admin.call("get-application", {"id": "admin/app-built-in"})
+    template = admin.call("get-application", {"id": args.application or "admin/app-built-in"})
+    if not isinstance(template, dict) or (args.application and (
+            template.get('organization') != organization
+            or template.get('owner', '') + '/' + template.get('name', '') != args.application)):
+        raise SystemExit('Probe template application is missing or outside the configured organization')
     application = {**template, "owner": "admin", "name": app_name, "displayName": "Authorization probe (temporary)", "organization": organization,
                    "clientId": "probe-" + tag, "clientSecret": secrets.token_hex(20), "enablePassword": True, "enableSignUp": False,
                    "enableCodeSignin": False, "enableWebAuthn": False, "enableFaceId": False, "isShared": False, "providers": [],

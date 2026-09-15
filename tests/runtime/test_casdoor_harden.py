@@ -1,11 +1,19 @@
 """Hardening regressions against the pinned Casdoor application wire contract."""
 import copy
+import contextlib
+import io
+import json
+import sys
+import tempfile
+from unittest.mock import patch
 import importlib.util
 from pathlib import Path
 import unittest
 
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / 'scripts'))
+from deployment import make_deployment
 spec = importlib.util.spec_from_file_location("casdoor_harden", ROOT / "scripts/casdoor-harden.py")
 harden = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(harden)
@@ -95,6 +103,67 @@ class ApplicationHardeningTests(unittest.TestCase):
                        "signinMethods": [{"name": "Face ID", "displayName": "Face ID", "rule": "Hide password"}]}
         self.assertEqual(harden.plan_application(application), [])
         self.assert_stays_hardened(application)
+
+
+class SharedIdentityBoundaryTests(unittest.TestCase):
+    def run_hardener(self, applications, flags):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = root / 'config.json'
+            config.write_text(json.dumps({'casdoor': {'organization': 'employees', 'client_id': 'worker'}}))
+            descriptor = root / 'deployment.json'
+            descriptor.write_text(json.dumps(make_deployment('external', 'https://login.example.com')))
+            calls = []
+            class API:
+                def __init__(self, config): pass
+                def call(self, action, query=None, body=None):
+                    calls.append((action, query, copy.deepcopy(body)))
+                    if action == 'get-applications': return copy.deepcopy(applications)
+                    if action == 'get-organization': return {'accountItems': [], 'isProfilePublic': True}
+            with patch.object(harden, 'Api', API), contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                try:
+                    result = harden.main(['--config', str(config), '--deployment', str(descriptor), *flags])
+                except SystemExit:
+                    result = 1
+            return result, calls
+
+    def test_external_requires_application_before_api_access(self):
+        result, calls = self.run_hardener([], ['--apply'])
+        self.assertEqual(result, 1)
+        self.assertEqual(calls, [])
+
+    def test_application_selection_leaves_organization_and_other_apps_untouched(self):
+        apps = [{'owner': 'admin', 'name': name, 'organization': 'employees', 'enableSignUp': True}
+                for name in ['headscale', 'sub2api']]
+        result, calls = self.run_hardener(apps, ['--application', 'admin/headscale', '--apply'])
+        self.assertEqual(result, 0)
+        self.assertFalse(any('organization' in action for action, _, _ in calls))
+        writes = [(q, b) for a, q, b in calls if a == 'update-application']
+        self.assertEqual(len(writes), 1)
+        self.assertEqual(writes[0][0]['id'], 'admin/headscale')
+
+    def test_unknown_application_fails_before_any_mutation(self):
+        result, calls = self.run_hardener([], ['--application', 'admin/missing', '--include-organization', '--apply'])
+        self.assertEqual(result, 1)
+        self.assertFalse(any(a.startswith('update-') for a, _, _ in calls))
+
+    def test_organization_policy_requires_explicit_selection(self):
+        apps = [{'owner': 'admin', 'name': 'headscale', 'organization': 'employees'}]
+        result, calls = self.run_hardener(apps, ['--application', 'admin/headscale', '--include-organization', '--apply'])
+        self.assertEqual(result, 0)
+        self.assertTrue(any(a == 'update-organization' for a, _, _ in calls))
+
+    def test_external_probe_requires_explicit_fixture_boundary(self):
+        spec = importlib.util.spec_from_file_location('probe', ROOT / 'scripts/verify-casdoor-authz.py')
+        probe = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(probe)
+        with tempfile.TemporaryDirectory() as directory:
+            descriptor = Path(directory) / 'deployment.json'
+            descriptor.write_text(json.dumps(make_deployment('external', 'https://login.example.com')))
+            with patch.object(probe, 'Admin') as api, contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit):
+                    probe.main(['--config', '/unread-config', '--deployment', str(descriptor)])
+                api.assert_not_called()
 
 
 if __name__ == "__main__":

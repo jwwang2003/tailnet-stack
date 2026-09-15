@@ -26,6 +26,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
+from deployment import load_deployment
+
 DIRECTORY_MANAGED_ITEMS = (
     "Display name", "First name", "Last name", "Avatar", "Email", "Phone", "Country code", "Country/Region",
     "Location", "Address", "Addresses", "Affiliation", "Title", "ID card type", "ID card", "ID card info",
@@ -135,16 +137,30 @@ def main(argv=None):
     parser.add_argument("--config", required=True, help="worker configuration (Casdoor origin, organization, service credentials)")
     parser.add_argument("--application", action="append", default=[], metavar="OWNER/NAME",
                         help="application to harden; default: every non-service application of the organization")
+    parser.add_argument("--deployment", type=Path, help="Deployment descriptor; external mode requires explicit applications")
+    parser.add_argument("--include-organization", action="store_true",
+                        help="Also change shared organization policy when selecting applications")
     parser.add_argument("--apply", action="store_true", help="write the planned changes")
     args = parser.parse_args(argv)
+    deployment = load_deployment(args.deployment)
+    external = deployment['identity']['mode'] == 'external'
+    if external and not args.application:
+        parser.error('External identity hardening requires explicit --application OWNER/NAME')
     config = json.loads(Path(args.config).read_text())
     organization_name = config["casdoor"]["organization"]
     api = Api(config)
-    organization = api.call("get-organization", {"id": "admin/" + organization_name})
-    if not isinstance(organization, dict):
-        raise SystemExit("organization not found")
-    plans = [("organization admin/" + organization_name, organization, plan_organization(organization), "update-organization", {"id": "admin/" + organization_name})]
+    plans = []
+    # Explicit application selection never implicitly changes all employees' policy.
+    if args.include_organization or (not external and not args.application):
+        organization = api.call("get-organization", {"id": "admin/" + organization_name})
+        if not isinstance(organization, dict):
+            raise SystemExit("organization not found")
+        plans.append(("organization admin/" + organization_name, organization, plan_organization(organization), "update-organization", {"id": "admin/" + organization_name}))
     applications = api.call("get-applications", {"owner": "admin"}) or []
+    available = {app['owner'] + '/' + app['name'] for app in applications
+                 if app.get('organization') == organization_name}
+    if set(args.application) - available:
+        raise SystemExit('Requested application is missing or outside the configured organization')
     for application in applications:
         if application.get("organization") != organization_name:
             continue
