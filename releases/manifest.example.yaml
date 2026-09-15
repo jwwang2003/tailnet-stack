@@ -31,3 +31,19 @@ rollback:
   prior_release: null
   prior_images_retained: false
   pre_migration_backup_reference: null
+
+# For a descriptor-bound release, copy runtime/deployment.json here and record
+# deployment_digest() from scripts/deployment.py. Do not infer mode from images.
+# deployment: {schema_version: 1, identity: ..., directory_sync: ..., services: ..., artifacts: ..., configuration_sha256: ...}
+# deployment_sha256: <canonical descriptor checksum>
+# Keep exactly the descriptor's artifact keys in images above.
+# External mode requires these records in addition to all validation and Tailnet
+# backup/restore evidence; Casdoor migration is omitted only because it is unowned.
+# external_identity:
+#   issuer: https://login.example.com
+#   version: <tested Casdoor version or identity release>
+#   evidence: <observed external OIDC compatibility report>
+#   recovery_reference: <identity owner's recovery runbook/record>
+# not_applicable:
+#   casdoor_migration: Managed and assessed by the external identity owner.
+#   casdoor_database_backup: External identity database is outside Tailnet ownership.

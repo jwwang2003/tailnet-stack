@@ -19,7 +19,15 @@ if [[ "$engine" == auto ]]; then
 fi
 case "$engine" in docker|podman) ;; *) echo 'CONTAINER_ENGINE must be auto, docker, or podman.' >&2; exit 1;; esac
 command -v "$engine" >/dev/null || { echo "$engine is not installed in this shell." >&2; exit 1; }
-build_platform=${BUILD_PLATFORM:-$(python3 "$integration_root/scripts/release.py" platform)}
+release_args=()
+if [[ -n "${DEPLOYMENT_FILE:-}" ]]; then
+  release_args+=(--deployment "$DEPLOYMENT_FILE")
+fi
+release() { python3 "$integration_root/scripts/release.py" "${release_args[@]}" "$@"; }
+# Validate selection before any pulls or builds. Omitted metadata retains the legacy set.
+artifacts=$(release artifacts)
+selected() { [[ $'\n'"$artifacts"$'\n' == *$'\n'"$1"$'\n'* ]]; }
+build_platform=${BUILD_PLATFORM:-$(release platform)}
 case "$build_platform" in linux/amd64|linux/arm64) ;; *) echo 'BUILD_PLATFORM must be linux/amd64 or linux/arm64.' >&2; exit 1;; esac
 build_flags=(--platform "$build_platform")
 if [[ "$engine" == docker ]]; then
@@ -82,14 +90,11 @@ build_image() {
 }
 echo "Building with $engine for $build_platform"
 
-python3 "$integration_root/scripts/release.py" verify-sources "$workspace"
-headscale_image=$(python3 "$integration_root/scripts/release.py" field headscale image)
-headplane_image=$(python3 "$integration_root/scripts/release.py" field headplane image)
-casdoor_image=$(python3 "$integration_root/scripts/release.py" field casdoor image)
-headscale_commit=$(python3 "$integration_root/scripts/release.py" field headscale source_commit)
-headplane_commit=$(python3 "$integration_root/scripts/release.py" field headplane source_commit)
-casdoor_commit=$(python3 "$integration_root/scripts/release.py" field casdoor source_commit)
-sync_image=$(python3 "$integration_root/scripts/release.py" support-image sync)
+release verify-sources "$workspace"
+headscale_image=$(release field headscale image)
+headplane_image=$(release field headplane image)
+headscale_commit=$(release field headscale source_commit)
+headplane_commit=$(release field headplane source_commit)
 integration_commit=$(git -C "$integration_root" rev-parse HEAD)
 
 build_image "$integration_root/build/headscale.Dockerfile" \
@@ -101,10 +106,17 @@ build_image "$workspace/headplane/Dockerfile" --target final \
   --build-arg "IMAGE_TAG=${HEADPLANE_VERSION:-0.7.1-integrated.1}" \
   --label "org.opencontainers.image.revision=$headplane_commit" \
   --tag "$headplane_image" "$workspace/headplane"
-build_image "$workspace/casdoor/Dockerfile" --target STANDARD \
+if selected casdoor; then
+  casdoor_image=$(release field casdoor image)
+  casdoor_commit=$(release field casdoor source_commit)
+  build_image "$workspace/casdoor/Dockerfile" --target STANDARD \
   --label "org.opencontainers.image.revision=$casdoor_commit" \
   --tag "$casdoor_image" "$workspace/casdoor"
-build_image "$integration_root/build/sync.Dockerfile" \
+fi
+if selected sync; then
+  sync_image=$(release support-image sync)
+  build_image "$integration_root/build/sync.Dockerfile" \
   --label "org.opencontainers.image.revision=$integration_commit" \
   --tag "$sync_image" "$integration_root"
+fi
 echo 'Local candidate images built. Export an image bundle for SSH deployment, or publish to a registry. Test before production.'

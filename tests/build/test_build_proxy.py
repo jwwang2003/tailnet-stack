@@ -11,17 +11,18 @@ import unittest
 SCRIPT = Path(__file__).resolve().parents[2] / 'scripts/build-products.sh'
 
 class BuildProxyTests(unittest.TestCase):
-    def run_build(self, proxy=None, endpoint='unix:///var/run/docker.sock', driver='docker', rootless=False, platform=None, podman=False, buildx=True, engine=True):
+    def run_build(self, proxy=None, endpoint='unix:///var/run/docker.sock', driver='docker', rootless=False, platform=None, podman=False, buildx=True, engine=True, deployment=None):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / 'scripts').mkdir()
             shutil.copy(SCRIPT, root / 'scripts/build-products.sh')
             shutil.copy(SCRIPT.parent / 'prepare-podman-buildfile.py', root / 'scripts/prepare-podman-buildfile.py')
+            shutil.copy(SCRIPT.parent / 'deployment.py', root / 'scripts/deployment.py')
             for recipe in ('build/headscale.Dockerfile','build/sync.Dockerfile','headplane/Dockerfile','casdoor/Dockerfile'):
                 path = root / recipe
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text('FROM golang:1.26.5 AS builder\nFROM alpine:3.22\n')
-            (root / 'scripts/release.py').write_text('import sys\nif "field" in sys.argv:\n print("test/image:rc" if sys.argv[-1] == "image" else "a"*40)\nelif "platform" in sys.argv: print("linux/amd64")\nelif "support-image" in sys.argv: print("test/sync:rc")\n')
+            (root / 'scripts/release.py').write_text('import sys\nfrom deployment import load_deployment\nselection=load_deployment(sys.argv[sys.argv.index("--deployment")+1] if "--deployment" in sys.argv else None)\nif "artifacts" in sys.argv: print("\\n".join(selection["artifacts"]))\nelif "field" in sys.argv:\n print("test/image:rc" if sys.argv[-1] == "image" else "a"*40)\nelif "platform" in sys.argv: print("linux/amd64")\nelif "support-image" in sys.argv: print("test/sync:rc")\n')
             binary = root / 'bin'
             binary.mkdir()
             identity = binary / 'id'
@@ -54,9 +55,14 @@ else: sys.exit(9)
                 docker.rename(binary / 'podman')
                 docker.symlink_to(binary / 'podman')
             log = root / 'builds.jsonl'
-            env = {k:v for k,v in os.environ.items() if k not in ('BUILD_PROXY_URL','DOCKER_HOST','DOCKER_CONTEXT','BUILD_PLATFORM','CONTAINER_ENGINE')}
+            env = {k:v for k,v in os.environ.items() if k not in ('BUILD_PROXY_URL','DOCKER_HOST','DOCKER_CONTEXT','BUILD_PLATFORM','CONTAINER_ENGINE','DEPLOYMENT_FILE')}
             env.update(PATH=str(binary)+os.pathsep+env['PATH'], TEST_ENDPOINT=endpoint,
                        TEST_DRIVER=driver, TEST_BUILDX='yes' if buildx else 'no', TEST_ENGINE='yes' if engine else 'no', TEST_SECURITY='["name=rootless"]' if rootless else '[]', TEST_LOG=str(log))
+            if deployment is not None:
+                descriptor = root / 'deployment.json'
+                descriptor.write_text(json.dumps(deployment))
+                env['DEPLOYMENT_FILE'] = str(descriptor)
+                (root / 'casdoor/Dockerfile').unlink()
             if platform is not None: env['BUILD_PLATFORM']=platform
             if proxy is not None: env['BUILD_PROXY_URL']=proxy
             result=subprocess.run(['bash',str(root / 'scripts/build-products.sh'),str(root)],env=env,text=True,capture_output=True)
@@ -124,3 +130,19 @@ else: sys.exit(9)
             self.assertEqual(build['args'][build['args'].index('--ulimit')+1], 'nofile=65536:65536')
             self.assertEqual(build['args'][build['args'].index('--format')+1], 'docker')
             self.assertIn('FROM docker.io/library/', build['recipe'])
+
+    def test_external_build_skips_identity_and_externally_owned_worker(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('build_deployment', SCRIPT.parent / 'deployment.py')
+        deployment = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(deployment)
+        for owner, count in [('external', 2), ('disabled', 2), ('local', 3)]:
+            with self.subTest(owner=owner):
+                result, builds = self.run_build(deployment=deployment.make_deployment(
+                    'external', 'https://login.example.com', owner))
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(len(builds), count)
+                self.assertFalse(any('/casdoor/' in str(build['args']) for build in builds))
+        result, builds = self.run_build(deployment={'schema_version': 99})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(builds, [])

@@ -290,6 +290,100 @@ class BundleTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 bundle.inputs()
 
+    def external(self, owner='external'):
+        selection = bundle.load_deployment()
+        from deployment import make_deployment
+        selection = make_deployment('external', 'https://login.example.com', owner)
+        descriptor = self.runtime / 'deployment.json'
+        descriptor.write_text(json.dumps(selection))
+        self.export_args.deployment = descriptor
+        return selection
+
+    def test_external_bundle_roundtrip_selects_only_owned_images(self):
+        selection = self.external()
+        self.export_args.pull_supporting_images = True
+        # No local identity or worker images are needed.
+        for key in ('casdoor', 'database', 'sync'):
+            image_id = 'sha256:' + str(list(bundle.ENV).index(key) + 1) * 64
+            self.docker.images = {ref: image for ref, image in self.docker.images.items()
+                                  if image['Id'] != image_id}
+        manifest = self.export()
+        self.assertEqual(manifest['schema_version'], 2)
+        self.assertEqual(set(manifest['images']), set(selection['artifacts']))
+        self.assertEqual(manifest['deployment_sha256'], bundle.deployment_digest(selection))
+        self.assertEqual([call[-1] for call in self.docker.calls if call[0] == 'pull'],
+                         [self.config['images']['reverse_proxy']])
+        self.docker.images.clear()
+        bundle.use_bundle(self.import_args)
+        self.import_args.action = 'check'
+        bundle.use_bundle(self.import_args)
+        for variable in ('CASDOOR_IMAGE', 'POSTGRES_IMAGE', 'WORKER_IMAGE'):
+            self.assertNotIn(variable, self.env.read_text())
+
+    def test_external_local_worker_is_included(self):
+        selection = self.external('local')
+        manifest = self.export()
+        self.assertEqual(set(manifest['images']), set(selection['artifacts']))
+        self.assertIn('sync', manifest['images'])
+        bundle.use_bundle(self.import_args)
+
+    def test_external_bundle_rejects_ownership_and_source_substitution_before_docker(self):
+        self.external()
+        original = self.export()
+        for mutation in ('extra', 'missing', 'revision', 'reference', 'descriptor', 'digest'):
+            with self.subTest(mutation=mutation):
+                manifest = copy.deepcopy(original)
+                if mutation == 'extra':
+                    manifest['images']['casdoor'] = manifest['images']['headscale']
+                elif mutation == 'missing':
+                    del manifest['images']['headplane']
+                elif mutation == 'revision':
+                    manifest['images']['headscale'].update(revision='f'*40, source_commit='f'*40)
+                elif mutation == 'reference':
+                    manifest['images']['headscale']['reference'] = 'wrong:latest'
+                elif mutation == 'descriptor':
+                    manifest['deployment']['identity']['issuer'] = 'https://other.example.com'
+                else:
+                    manifest['deployment_sha256'] = 'f'*64
+                self.write_manifest(manifest)
+                self.docker.calls.clear()
+                with self.assertRaises(ValueError):
+                    bundle.use_bundle(self.import_args)
+                self.assertEqual(self.docker.calls, [])
+                self.assertEqual(self.env.read_bytes(), self.original)
+
+    def test_legacy_bundle_cannot_be_loaded_into_external_runtime(self):
+        self.export()
+        self.external()
+        self.docker.calls.clear()
+        with self.assertRaisesRegex(ValueError, 'Legacy bundle'):
+            bundle.use_bundle(self.import_args)
+        self.assertEqual(self.docker.calls, [])
+
+    def test_legacy_bundle_supports_new_bundled_runtime_with_complete_selection(self):
+        self.export()
+        from deployment import make_deployment
+        descriptor = make_deployment('bundled', 'https://login.example.com')
+        (self.runtime / 'deployment.json').write_text(json.dumps(descriptor))
+        bundle.use_bundle(self.import_args)
+        self.import_args.action = 'check'
+        bundle.use_bundle(self.import_args)
+
+    def test_external_bundle_requires_descriptor_and_unchanged_configuration(self):
+        selection = self.external()
+        compose = self.runtime / 'compose.yaml'
+        compose.write_text('services: {}')
+        selection['configuration_sha256'] = {'compose.yaml': bundle.digest(compose)}
+        self.export_args.deployment.write_text(json.dumps(selection))
+        self.export()
+        self.docker.calls.clear()
+        with self.assertRaisesRegex(ValueError, 'requires a deployment'):
+            bundle.validate_bundle(self.output)
+        compose.write_text('services: changed')
+        with self.assertRaisesRegex(ValueError, 'configuration changed'):
+            bundle.use_bundle(self.import_args)
+        self.assertEqual(self.docker.calls, [])
+
     def test_import_and_check_do_not_import_yaml(self):
         self.export()
         import builtins

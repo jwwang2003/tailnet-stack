@@ -16,6 +16,7 @@ from rich.console import Console
 from rich.table import Table
 
 from release import read_yaml
+from deployment import load_deployment, verify_configuration
 
 ROOT = Path(__file__).resolve().parents[1]
 app = typer.Typer(
@@ -69,8 +70,12 @@ def resolve_registry(region: str, organization: str) -> str:
 def load_sources(
     images: list[str] | None = None,
     platform: str | None = None,
+    deployment: Path | None = None,
 ) -> tuple[str, dict[str, str]]:
     """Use explicit images when supplied; otherwise discover the release images."""
+    selection = load_deployment(deployment) if deployment is not None else None
+    if deployment is not None:
+        verify_configuration(deployment.parent, selection)
     inputs = {}
     if not images or platform is None:
         inputs = json.loads((ROOT / "image-inputs.json").read_text())
@@ -94,6 +99,8 @@ def load_sources(
         if lock.get("schema_version") != 1 or not isinstance(components, dict):
             raise ValueError("Invalid components/schema in versions.lock.yaml")
         for name, component in components.items():
+            if selection and name not in selection["artifacts"]:
+                continue
             if not isinstance(component, dict):
                 raise ValueError(f"Invalid component: {name}")
             entries.append((name, component.get("image")))
@@ -103,7 +110,10 @@ def load_sources(
             raise ValueError("Invalid images in image-inputs.json")
         # Preserve the repository names used by existing deployments.
         aliases = {"database": "postgres", "reverse_proxy": "caddy"}
-        entries.extend((aliases.get(name, name), source) for name, source in support_images.items())
+        entries.extend((aliases.get(name, name), source) for name, source in support_images.items()
+                       if not selection or name in selection["artifacts"])
+        if selection and not set(selection["artifacts"]) <= (set(components) | set(support_images)):
+            raise ValueError("Missing selected release image")
 
     sources = {}
     for name, source in entries:
@@ -232,6 +242,10 @@ def main(
         str | None,
         typer.Option(help="Expected linux/amd64 or linux/arm64; defaults to image-inputs.json"),
     ] = None,
+    deployment: Annotated[
+        Path | None,
+        typer.Option(help="Rendered deployment descriptor for the default image selection"),
+    ] = None,
     dry_run: Annotated[
         bool,
         typer.Option("--dry-run", help="Preview without Docker access or credentials"),
@@ -240,7 +254,7 @@ def main(
     """Log in to Huawei SWR and upload the local Docker images."""
     try:
         registry = resolve_registry(region, organization)
-        platform, sources = load_sources(images, platform)
+        platform, sources = load_sources(images, platform, deployment)
         tags = {name: resolve_tag(source, platform, tag) for name, source in sources.items()}
         targets = {
             name: f"{registry}/{organization}/{name}:{tags[name]}"

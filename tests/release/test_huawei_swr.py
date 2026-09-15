@@ -45,6 +45,21 @@ class SWRTests(unittest.TestCase):
                 self.assertIn(f'swr.{region}.myhuaweicloud.com/test-org/', result.output)
             docker.assert_not_called()
 
+    def test_external_descriptor_filters_defaults_but_preserves_explicit_images(self):
+        from deployment import make_deployment
+        with tempfile.TemporaryDirectory() as directory:
+            descriptor = Path(directory) / 'deployment.json'
+            for owner in ('external', 'disabled', 'local'):
+                descriptor.write_text(json.dumps(make_deployment('external', 'https://login.example.com', owner)))
+                platform, sources = swr.load_sources(deployment=descriptor)
+                expected = {'headscale', 'headplane', 'caddy'} | ({'sync'} if owner == 'local' else set())
+                self.assertEqual(set(sources), expected)
+                _, explicit = swr.load_sources(['api=local/api:v2'], 'linux/amd64', descriptor)
+                self.assertEqual(explicit, {'api': 'local/api:v2'})
+            descriptor.write_text('{}')
+            with self.assertRaises(ValueError):
+                swr.load_sources(deployment=descriptor)
+
     def run_upload(self, *, region='cn-north-4', platform='linux/amd64',
                    missing=False, push_failure=False, bad_digest=False,
                    dry_run=False, credentials=True, registry=None,

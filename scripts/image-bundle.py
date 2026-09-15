@@ -1,5 +1,5 @@
-#!/usr/bin/env python3
-"""Transfer the six deployment images without a registry (Python 3; export needs PyYAML)."""
+#!/usr/bin/env python
+"""Transfer selected deployment images without a registry."""
 import argparse
 import hashlib
 import json
@@ -11,6 +11,10 @@ import stat
 import subprocess
 import sys
 import tempfile
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from deployment import (load_deployment, validate_deployment, selected_products,
+                        deployment_digest, verify_configuration)
 
 ROOT = Path(__file__).resolve().parents[1]
 PRODUCTS = ('headscale', 'headplane', 'casdoor')
@@ -49,16 +53,19 @@ def read_json(path):
     return json.loads(path.read_text(), object_pairs_hook=pairs)
 
 
-def inputs():
+def inputs(deployment=None):
     data = read_json(ROOT / 'image-inputs.json')
     require(isinstance(data, dict) and data.get('schema_version') == 1,
             'Unsupported image-inputs.json schema')
     require(data.get('platform') in ('linux/amd64', 'linux/arm64'), 'Invalid input platform')
     images = data.get('images')
-    require(isinstance(images, dict) and set(images) == {'sync', 'database', 'reverse_proxy'},
-            'image-inputs.json must contain sync, database, reverse_proxy')
-    for reference in images.values():
-        validate_reference(reference)
+    required = set(deployment['artifacts']) - set(PRODUCTS) if deployment else {'sync', 'database', 'reverse_proxy'}
+    require(isinstance(images, dict) and required <= set(images),
+            'image-inputs.json is missing selected support images')
+    if deployment is None:
+        require(set(images) == required, 'image-inputs.json must contain sync, database, reverse_proxy')
+    for key in required:
+        validate_reference(images[key])
     return data
 
 
@@ -109,7 +116,11 @@ def export_bundle(args):
     require(not output.exists() and not output.is_symlink(), 'Output already exists: ' + str(output))
     require(not command('git', '-C', str(ROOT), 'status', '--porcelain', '--untracked-files=all'),
             'Export requires a clean integration Git checkout')
-    config = inputs()
+    descriptor_path = getattr(args, 'deployment', None)
+    deployment = load_deployment(descriptor_path)
+    if descriptor_path:
+        verify_configuration(Path(descriptor_path).parent, deployment)
+    config = inputs(deployment if descriptor_path else None)
     require(args.platform == config['platform'], 'Platform must match image-inputs.json')
     try:
         import yaml
@@ -121,10 +132,12 @@ def export_bundle(args):
         raise ValueError('Invalid versions.lock.yaml: ' + str(error)) from error
     require(isinstance(lock, dict) and lock.get('schema_version') == 1 and
             isinstance(lock.get('components'), dict), 'Invalid versions.lock.yaml')
-    manifest = dict(schema_version=1, exporter=engine, platform=args.platform, **binding(), images={})
-    references = dict(config['images'])
+    manifest = dict(schema_version=2 if descriptor_path else 1, exporter=engine, platform=args.platform, **binding(), images={})
+    if descriptor_path:
+        manifest.update(deployment=deployment, deployment_sha256=deployment_digest(deployment))
+    references = {key: value for key, value in config['images'].items() if key in deployment['artifacts']}
     revisions = dict(sync=manifest['integration_commit'], database=None, reverse_proxy=None)
-    for key in PRODUCTS:
+    for key in selected_products(deployment):
         component = lock['components'].get(key)
         require(isinstance(component, dict), 'Missing product lock: ' + key)
         references[key] = component.get('image')
@@ -134,13 +147,15 @@ def export_bundle(args):
         revisions[key] = revision
     if args.pull_supporting_images:
         for key in ('database', 'reverse_proxy'):
+            if key not in references:
+                continue
             reference = references[key]
             if engine == 'podman':
                 first = reference.split('/')[0]
                 if '/' not in reference or not ('.' in first or ':' in first or first == 'localhost'):
                     reference = 'docker.io/' + (reference if '/' in reference else 'library/' + reference)
             command(engine, 'pull', '--platform', args.platform, reference)
-    for key in ENV:
+    for key in deployment['artifacts']:
         actual = inspect(references[key], engine)
         # Supporting images may carry their own upstream revision label.
         if key not in PRODUCTS and key != 'sync':
@@ -158,6 +173,9 @@ def export_bundle(args):
                 *(image['id'] for image in manifest['images'].values()))
         manifest['archive'] = dict(file='images.tar', sha256=digest(archive))
         (staging / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+        if descriptor_path:
+            require(load_deployment(descriptor_path) == deployment, 'Deployment changed during export')
+            verify_configuration(Path(descriptor_path).parent, deployment)
         current_binding = binding()
         require(current_binding == {key: manifest[key] for key in current_binding}, 'Source changed during export')
         require(not output.exists() and not output.is_symlink(), 'Output appeared during export')
@@ -165,19 +183,37 @@ def export_bundle(args):
     finally:
         if staging.exists():
             shutil.rmtree(staging)
-    print('Exported six images to ' + str(output))
+    print(f'Exported {len(manifest["images"])} images to {output}')
 
 
-def validate_bundle(bundle):
+def validate_bundle(bundle, deployment=None):
     manifest = read_json(bundle / 'manifest.json')
-    require(isinstance(manifest, dict) and manifest.get('schema_version') == 1,
+    require(isinstance(manifest, dict) and manifest.get('schema_version') in (1, 2),
             'Unsupported bundle manifest schema')
+    schema = manifest['schema_version']
+    selection = deployment or load_deployment()
+    if schema == 2:
+        require(deployment is not None, 'Schema 2 bundle requires a deployment descriptor')
+        validate_deployment(manifest.get('deployment'))
+        require(manifest['deployment'] == selection, 'Bundle deployment differs from runtime')
+        require(manifest.get('deployment_sha256') == deployment_digest(selection),
+                'Bundle deployment checksum mismatch')
+    else:
+        require(selection['identity']['mode'] == 'bundled' and
+                selection['artifacts'] == load_deployment()['artifacts'],
+                'Legacy bundle requires the complete bundled deployment')
     for key, value in binding().items():
         require(manifest.get(key) == value, 'Bundle source binding mismatch: ' + key)
-    config = inputs()
+    config = inputs(selection if schema == 2 else None)
     require(manifest.get('platform') == config['platform'], 'Bundle platform differs from image-inputs.json')
     images = manifest.get('images')
-    require(isinstance(images, dict) and set(images) == set(ENV), 'Bundle must contain all six images')
+    require(isinstance(images, dict) and set(images) == set(selection['artifacts']),
+            'Bundle images differ from deployment selection')
+    # Schema 2 validates the product catalog as well as its checksum binding.
+    components = {}
+    if schema == 2:
+        import yaml
+        components = yaml.safe_load((ROOT / 'versions.lock.yaml').read_text())['components']
     for key, item in images.items():
         require(isinstance(item, dict), 'Invalid image record: ' + key)
         image_id = item.get('id')
@@ -197,6 +233,10 @@ def validate_bundle(bundle):
                     'Invalid source revision: ' + key)
             if key == 'sync':
                 require(source == manifest['integration_commit'], 'Sync revision differs from integration commit')
+        if schema == 2 and key in PRODUCTS:
+            expected = components[key]
+            require(item['reference'] == expected['image'] and item['source_commit'] == expected['source_commit'],
+                    'Product image differs from source lock: ' + key)
         if key in config['images']:
             require(item['reference'] == config['images'][key], 'Image reference differs from inputs: ' + key)
     archive = manifest.get('archive')
@@ -261,7 +301,18 @@ def pin_env(path, values):
 
 
 def use_bundle(args):
-    manifest = validate_bundle(args.bundle.resolve())
+    descriptor_path = getattr(args, 'deployment', None)
+    runtime_descriptor = args.runtime.resolve() / 'deployment.json'
+    if runtime_descriptor.exists():
+        runtime_deployment = load_deployment(runtime_descriptor)
+        if descriptor_path:
+            require(load_deployment(descriptor_path) == runtime_deployment,
+                    'Selected deployment differs from runtime descriptor')
+        descriptor_path = runtime_descriptor
+    deployment = load_deployment(descriptor_path) if descriptor_path else None
+    if descriptor_path:
+        verify_configuration(args.runtime.resolve(), deployment)
+    manifest = validate_bundle(args.bundle.resolve(), deployment)
     env_path = args.runtime.resolve() / 'compose.env'
     require(env_path.is_file() and not env_path.is_symlink(), 'Configure runtime/compose.env before import/check')
     validate_daemon(manifest['platform'])
@@ -272,7 +323,7 @@ def use_bundle(args):
             command('docker', 'image', 'tag', item['id'], item['alias'])
         validate_loaded(manifest, aliases=True)
         pin_env(env_path, env_values(manifest))
-        print('Imported and pinned six images. Services have not been started.')
+        print(f'Imported and pinned {len(manifest["images"])} images. Services have not been started.')
     else:
         validate_loaded(manifest, aliases=True)
         values = env_values(manifest)
@@ -290,12 +341,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     actions = parser.add_subparsers(dest='action', required=True)
     export = actions.add_parser('export')
+    export.add_argument('--deployment', type=Path)
     export.add_argument('--engine', choices=('docker', 'podman'), default='docker')
     export.add_argument('--output', type=Path, required=True)
     export.add_argument('--platform', choices=('linux/amd64', 'linux/arm64'), default='linux/amd64')
     export.add_argument('--pull-supporting-images', action='store_true')
     for action in ('import', 'check'):
         sub = actions.add_parser(action)
+        sub.add_argument('--deployment', type=Path)
         sub.add_argument('--bundle', type=Path, required=True)
         sub.add_argument('--runtime', type=Path, default=Path('.runtime'))
     args = parser.parse_args()

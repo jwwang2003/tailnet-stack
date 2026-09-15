@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 """Read source locks and enforce local build / production promotion conditions."""
 
 import argparse
@@ -10,6 +10,9 @@ import sys
 from pathlib import Path
 
 import yaml
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from deployment import load_deployment, validate_deployment, selected_products, deployment_digest, verify_configuration
 
 ROOT = Path(__file__).resolve().parents[1]
 COMPONENTS = ("headscale", "headplane", "casdoor")
@@ -25,10 +28,10 @@ def read_yaml(path):
     return value
 
 
-def check_lock(lock):
+def check_lock(lock, required_products=COMPONENTS):
     if lock.get("schema_version") != 1:
         raise ValueError("Unsupported source lock schema")
-    for component in COMPONENTS:
+    for component in required_products:
         entry = lock.get("components", {}).get(component, {})
         for field in ("upstream_commit", "source_commit"):
             if not SHA.fullmatch(str(entry.get(field, ""))):
@@ -43,9 +46,10 @@ def git(path, *arguments):
     ).strip()
 
 
-def verify_sources(lock, workspace):
-    check_lock(lock)
-    for component in COMPONENTS:
+def verify_sources(lock, workspace, deployment=None):
+    products = selected_products(deployment or load_deployment())
+    check_lock(lock, products)
+    for component in products:
         path = Path(workspace) / component
         if git(path, "branch", "--show-current") in ("main", "master"):
             raise ValueError(f"{component}: use a downstream branch or detached worktree")
@@ -55,9 +59,13 @@ def verify_sources(lock, workspace):
             raise ValueError(f"{component}: HEAD does not match source_commit")
 
 
-def check_offline_images(lock, manifest, lock_bytes, bundle):
-    if not isinstance(bundle, dict) or bundle.get("schema_version") != 1:
+def check_offline_images(lock, manifest, lock_bytes, bundle, deployment=None):
+    selection = deployment or load_deployment()
+    schema = 2 if deployment is not None else 1
+    if not isinstance(bundle, dict) or bundle.get("schema_version") != schema:
         raise ValueError("Offline distribution requires the exported bundle manifest")
+    if schema == 2:
+        check_deployment_binding(bundle, selection)
     if bundle.get("integration_commit") != manifest.get("integration_commit"):
         raise ValueError("Offline bundle integration commit differs")
     if bundle.get("versions_lock_sha256") != hashlib.sha256(lock_bytes).hexdigest():
@@ -71,9 +79,9 @@ def check_offline_images(lock, manifest, lock_bytes, bundle):
     if manifest.get("bundle_sha256") != checksum:
         raise ValueError("Offline release bundle checksum differs")
     images = bundle.get("images", {})
-    expected_keys = set(COMPONENTS) | {"sync", "reverse_proxy", "database"}
+    expected_keys = set(selection["artifacts"])
     if not isinstance(images, dict) or set(images) != expected_keys:
-        raise ValueError("Offline bundle must contain all six images")
+        raise ValueError("Offline bundle images differ from deployment selection")
     for component, image in images.items():
         if not isinstance(image, dict):
             raise ValueError("Invalid offline image record")
@@ -91,24 +99,48 @@ def check_offline_images(lock, manifest, lock_bytes, bundle):
         expected_revision = lock["components"][component]["source_commit"] if component in COMPONENTS else manifest["integration_commit"] if component == "sync" else None
         if expected_revision and image.get("revision") != expected_revision:
             raise ValueError("Offline image source revision differs")
+        if schema == 2 and component in COMPONENTS:
+            if (image.get("reference") != lock["components"][component]["image"]
+                    or image.get("source_commit") != expected_revision):
+                raise ValueError("Offline product image differs from source lock")
 
 
-def check_promotion(lock, manifest, lock_bytes, bundle=None):
-    check_lock(lock)
+def check_deployment_binding(record, deployment):
+    """Bind a release or bundle to its explicit runtime ownership contract."""
+    validate_deployment(deployment)
+    if record.get("deployment") != deployment:
+        raise ValueError("Deployment descriptor differs")
+    if record.get("deployment_sha256") != deployment_digest(deployment):
+        raise ValueError("Deployment descriptor checksum differs")
+
+
+def check_promotion(lock, manifest, lock_bytes, bundle=None, deployment=None):
+    selection = deployment or load_deployment()
+    products = selected_products(selection)
+    check_lock(lock, products)
+    if deployment is not None:
+        check_deployment_binding(manifest, selection)
+        recorded = manifest.get("configuration_sha256", {})
+        if any(recorded.get(key) != value for key, value in selection["configuration_sha256"].items()):
+            raise ValueError("Manifest configuration differs from deployment")
+    elif "deployment" in manifest or "deployment_sha256" in manifest:
+        raise ValueError("Use --deployment to validate a deployment-bound release")
     if lock.get("release", {}).get("compatibility_verified") is not True:
         raise ValueError("Release compatibility is not verified")
+    if set(manifest.get("images", {})) != set(selection["artifacts"]):
+        raise ValueError("Manifest images differ from deployment selection")
     distribution = manifest.get("distribution", "registry")
     if distribution == "offline":
-        check_offline_images(lock, manifest, lock_bytes, bundle)
+        check_offline_images(lock, manifest, lock_bytes, bundle, deployment)
     elif distribution == "registry":
-        for component in COMPONENTS:
+        for component in products:
             entry = lock["components"][component]
             if not DIGEST.fullmatch(str(entry.get("image_digest", ""))):
                 raise ValueError(f"{component}: immutable image digest is missing")
             expected = f"{entry['image'].split('@')[0]}@{entry['image_digest']}"
             if manifest.get("images", {}).get(component) != expected:
                 raise ValueError(f"{component}: manifest image differs from source lock")
-        for component in ("sync", "reverse_proxy", "database"):
+        for component in set(selection["artifacts"]) - set(products):
             ref = manifest.get("images", {}).get(component, "")
             if not isinstance(ref, str) or "@" not in ref or not DIGEST.fullmatch(ref.rsplit("@", 1)[1]):
                 raise ValueError(f"{component}: immutable manifest image is missing")
@@ -125,9 +157,19 @@ def check_promotion(lock, manifest, lock_bytes, bundle=None):
         result = manifest.get("validation", {}).get(field)
         if not isinstance(result, dict) or result.get("passed") is not True or not result.get("evidence"):
             raise ValueError(f"Validation evidence missing: {field}")
-    for component in COMPONENTS:
+    for component in products:
         if not manifest.get("migrations", {}).get(component):
             raise ValueError(f"Migration assessment missing: {component}")
+    if selection["identity"]["mode"] == "external":
+        external = manifest.get("external_identity", {})
+        if (external.get("issuer") != selection["identity"]["issuer"]
+                or not external.get("version") or not external.get("evidence")
+                or not external.get("recovery_reference")):
+            raise ValueError("External issuer version, compatibility and recovery evidence missing")
+        exemptions = manifest.get("not_applicable", {})
+        for field in ("casdoor_migration", "casdoor_database_backup"):
+            if not exemptions.get(field):
+                raise ValueError("External identity ownership reason missing: " + field)
     backup = manifest.get("backup", {})
     if not backup.get("reference") or not backup.get("restored_successfully_at_utc"):
         raise ValueError("Backup/restore evidence is missing")
@@ -143,6 +185,7 @@ def check_promotion(lock, manifest, lock_bytes, bundle=None):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--lock", type=Path, default=ROOT / "versions.lock.yaml")
+    parser.add_argument("--deployment", type=Path, help="Rendered deployment descriptor; omit for legacy bundled mode")
     sub = parser.add_subparsers(dest="command", required=True)
     show = sub.add_parser("field")
     show.add_argument("component", choices=COMPONENTS)
@@ -150,6 +193,7 @@ def main():
     auxiliary = sub.add_parser("support-image")
     auxiliary.add_argument("component", choices=("sync", "database", "reverse_proxy"))
     sub.add_parser("platform")
+    sub.add_parser("artifacts")
     verify = sub.add_parser("verify-sources")
     verify.add_argument("workspace", type=Path)
     promote = sub.add_parser("check-promotion")
@@ -158,8 +202,13 @@ def main():
     args = parser.parse_args()
     try:
         lock = read_yaml(args.lock)
-        check_lock(lock)
-        if args.command in ("support-image", "platform"):
+        deployment = load_deployment(args.deployment)
+        if args.deployment:
+            verify_configuration(args.deployment.parent, deployment)
+        check_lock(lock, selected_products(deployment))
+        if args.command == "artifacts":
+            print("\n".join(deployment["artifacts"]))
+        elif args.command in ("support-image", "platform"):
             inputs = json.loads((ROOT / "image-inputs.json").read_text())
             if inputs.get("schema_version") != 1:
                 raise ValueError("Unsupported image input schema")
@@ -170,11 +219,12 @@ def main():
         elif args.command == "field":
             print(lock["components"][args.component][args.field])
         elif args.command == "verify-sources":
-            verify_sources(lock, args.workspace)
+            verify_sources(lock, args.workspace, deployment)
             print("Source checkouts match the release lock and are clean.")
         else:
             check_promotion(lock, read_yaml(args.manifest), args.lock.read_bytes(),
-                            json.loads(args.bundle_manifest.read_text()) if args.bundle_manifest else None)
+                            json.loads(args.bundle_manifest.read_text()) if args.bundle_manifest else None,
+                            deployment if args.deployment else None)
             print("Recorded production promotion conditions passed; no branches or deployment changed.")
     except (ValueError, KeyError, OSError, subprocess.CalledProcessError, yaml.YAMLError) as error:
         print(f"Release check failed: {error}", file=sys.stderr)
